@@ -1,0 +1,1497 @@
+
+AtariAge Forums
+
+     Create
+    w1k
+    w1k
+
+Have You Played Atari Today?
+2600|5200|7800|Lynx|Jaguar|Forums|Store
+
+    Forums
+    Clubs
+    Apps
+    All Activity
+    My Activity Streams
+    More
+    Subscriptions
+    Map
+
+This Topic
+
+    Messenger
+    Unread Content
+
+    Home
+    Atari Systems
+    Atari 8-Bit Computers
+    Atari 5200 / 8-bit Programming
+    VBXE - a step by step code example in MADs assembly
+
+VBXE - a step by step code example in MADs assembly
+Yaron Nir
+
+By Yaron Nir
+January 31, 2023 in Atari 5200 / 8-bit Programming
+
+Yaron Nir
+
+    Yaron Nir Dragonstomper
+    Members
+        508 posts
+
+    Report
+
+Posted January 31, 2023 (edited)
+
+Hello Atarians,
+
+I've decided to cancel my VBXE tutorial page and focus on this new thread providing a step by step VBXE code example in MADs assembly.
+
+I will try to provide as much detail as possible for each step, and will include the things i have picked up in the last few weeks with the good help of good AA members. Without them this would have been possible. i was trying to document the code as much as possible, so if you find areas that are wrong, or missing or you don't understand, let me know and i will try to do a better job.....
+
+ 
+
+The outcome of this step by step example is the following screen:
+
+image.png.a6fbfd721217e33f429f092b562ceaa0.png
+
+What you see here is a a hi-res colorful sprite (that monster dude in the middle), overlaid on an ANTIC 4 character background (yes, ugly!) screen.
+
+ 
+
+here is the executable to try it out in your altirra or a real hardware (if you have VBXE installed):
+
+vbxe.xex 5.04 kB · 80 downloads
+
+ 
+
+ok, let's do the steps.
+
+ 
+
+Pre-step - Understanding the VBXE concept
+
+My recommendation is to read the VBXE manual. yes, it is hard to understand but gives you at a high level review of the VBXE and its controls and registers.
+
+In short, the VBXE can be looked at as an additional graphic screen layer on top of the ANTIC screen with its own memory control and registers.
+
+As A8 presented limitation for PMGs and colors, with VBXE you can create hi res colorful graphics and sprites. One thing I will definately use VBXE for is to write games that has Antic 4 background and as many sprite as I want in VBXE. 
+
+ 
+
+VBXE memory is 512KB. The memory concept is that, you set a RAM A8 memory pointing to a VBXE virtual memory. The RAM memory is called MEMAC (which is short for memory access). You can freely choose where this RAM memory will reside and how big will it be (4 available sizes: 4KB, 16KB, 32KB, 64KB).
+
+To operate in this mode you will need to work with MEMAC-A. On the other hand, there is already a pre-defined RAM memory area and fixed size with the address of $4000 and size of $4000 = 16KB. You will need to work with MEMAC-B for that. In my example, I will work with MEMAC-A, meaning I will set the memory address and size of the RAM. 
+
+Note: This RAM access is mostly referred as MEMAC window. Although this window is not really visible , it will be your direct communication with VBXE memory.
+
+ 
+
+Step 1 - Detecting VBXE
+
+Here is a code snippet of a routine(s) written in MADS assembly to detect the VBXE:
+
+ 
+
+;*********************************************************
+; proc name:  check_vbxe
+; purpose:    as VBXE board has few versions, we need to 
+;             check if locations $D600 or $D700 are used
+;             if not --> vbxe is not installed 
+;*********************************************************
+.proc check_vbxe 
+    ; set $D600 into base address ZP variable 
+    mwa #VBXE_D600 VBXE_BASE_ADDR
+    jsr detect_vbxe 
+    beq exit_check
+    ; if $D600 was not recognized, check $D700
+    inc VBXE_BASE_ADDR+1
+    jsr detect_vbxe 
+    beq exit_check 
+    ; no VBXE installed --> set to 0 
+    mva #$00 VBXE_BASE_ADDR 
+
+exit_check
+    rts 
+.endp ;check_vbxe
+
+;*********************************************************
+; proc name:  detect_vbxe
+; purpose:    check major (core) and minor versions at
+;             locations base+40 and base+41 respectively 
+;*********************************************************
+.proc detect_vbxe
+    ; check FX 1.xx (location $40)
+    ldy #VBXE_CORE_VERSION
+    lda (VBXE_BASE_ADDR),y
+    cmp #$10    
+    bne exit_detect 
+    ; check minor version (location $41)
+    ldy #VBXE_MINOR_VERSION
+    lda (VBXE_BASE_ADDR),y
+    ; the following and was recommended to do in
+    ; the VBXE documentation to avoid minor version differences 
+    and #$70
+    cmp #$20    
+
+exit_detect 
+    rts
+.endp; detect_vbxe
+
+So, the first step is to check if VBXE is installed. it could be installed in either $D600 or $D700 memory address locations.
+
+If it is not, your app can not work and you need to display an error message and exit.
+
+From the documentation the way to check if VBXE is installed is as follows:
+
+      Quote
+
+    When CORE_VERSION = 0x10 - FX v1.xx is running
+    When CORE_VERSION = 0x11 - GTIA emu v1.xx is running
+    Other values are RESERVED for further core types. The value if VBXE is not present is
+    undefined.
+
+That is what the code above does, it compares the CORE register (base+$40) with $10 and the moves to check the minor version.
+
+From the documentation:
+
+      Quote
+
+    Next thing to do is to read MINOR_REVISION. Bit 7 of this register determines whether its
+    a "a" core (bit cleared), or "r" core (bit set).
+    In most cases this information can be discarded, thus 0x7F AND mask should be applied.
+    Bits 6-0 contain BCD coded revision of the core (ie: 0x26 = core v1.26, 0x06 = core
+    v1.06). Compatible cores have bits 6-4 equal, so software for core FX core v1.20 can
+    should run at core v1.24.
+
+That is what the code above does. load the minor register (base +$41) AND with $70 and compare with $20.
+
+if none of the above works (for both addresses $D600 and $D700) - no VBXE is installed.
+
+once VBXE is detected either in $D600 or $D700 , we store the address in a zero page variable that will be acting as he base address for all VBXE registers.
+
+it will be easier later on to load into Y register the desired register load the value into accomulator and store it with y index.
+
+example: 
+
+	ldy #VBXE_REGISTER
+	lda #VALUE 
+	sta (VBXE_BASE_ADDR),y
+
+ 
+
+ 
+
+Step 2 - Disable XDL 
+
+Here is a code snippet of a routine(s) written in MADS assembly to disable XDL:
+
+ 
+
+; call to disable the XDL 
+	enable_xdl #VBXE_VIDEO_CONTROL_XDL_DISABLED
+	.
+	.
+	.
+	.
+; call to enable the XDL
+	enable_xdl #VBXE_VIDEO_CONTROL_XDL_ENABLED 
+
+;*********************************************************
+; proc name:  enable_xdl
+; parameters: 0=disable, 1=enable
+; purpose:    sets 0/1 in VBXE video control to enable
+;             or disable the display
+;*********************************************************
+.proc enable_xdl(.byte x).reg 
+    
+    ; x-reg holds enable/disable
+    ; enable/disable XDL
+    ldy #VBXE_VIDEO_CONTROL
+    txa 
+    sta (VBXE_BASE_ADDR),y 
+
+    rts 
+.endp ; enable_xdl
+
+ 
+
+Setting the VBXE_VIDEO_CONTROL (base+ $40, yes same as the core version, but it is not 'write' rather than 'read') with 0 will disable the XDL and with 1 will enable the XDL. XDL is the display list of VBXE (short for extended display list). it is a list of display controls that basically define the VBXE overlay screen.
+
+disabling XDL before do anything else is same as turning ANTIC off. you don't want to see graphics gibberish appearing on screen due to memory setup.
+
+ 
+
+Step 3 - Set up VBXE memory access  
+
+Here is a code snippet of a routine(s) written in MADS assembly to setup the memory access:
+
+ 
+
+;*********************************************************
+; proc name:  setup_vbxe_memac
+; purpose:    set up MEMAC-A memory for VBXE
+;             that means set the address space for it
+;             choose the access (CPU/VBXE) 
+;             and choose the memory size
+;*********************************************************
+.proc setup_vbxe_memac   
+    
+	;-------------------------------------------------------    
+	; set MEMAC-A memory 
+	; set the MEMAC-A window address
+	; set CPU access
+	; set 4K size  
+	;-------------------------------------------------------
+	ldy #VBXE_MEMAC_CTRL
+	lda #(>VBXE_MEMC_WINDOW + MEMC_CPU_ENABLE + MEMC_SIZE_4K) 	
+	sta (VBXE_BASE_ADDR),y 	
+
+	rts 
+.endp ; setup_vbxe_memac
+
+As mentioned in the pre-step paragraph, the memory access MEMAC-A allows the developer to define on his own where the RAM of the VBXE memory access will reside. in the code example above I chose  VBXE_MEMAC_WINDOW address to be $9000 so I enter the high byte order of this address hence the '>' before the address constant.  I am adding the state "CPU ENABLED" and that means that VBXE will be accessed by the CPU. I am also adding the size of the VBXE memory access RAM which is 4KB. Besides CPU access there is also ANTIC access so this value can be either CPU or ANTIC or both (CPU & ANTIC) or none.
+
+common practice is to set the MEMAC RAM memory to location $8000. I chose $9000 just from a convenient perspective. 
+
+
+Now that we have the VBXE memory access RAM in place (starting at $9000 and with the size of $1000=4KB), that means that the VBXE virtual memory (the entire 512 KB) will be divided into chunks of 4KB, where each chunk will be access through the VBXE memory access ram that point each time to a different virtual location in the VBXE memory space area. the switching between these chunks occurs with bank selection. If the VBXE address space is between $000000-$080000 , if we want to access address $00F000 for example, then we need to switch to bank $0F each bank is aligned to $1000 and if we want to access address $0004DE0 then we switch to bank $04. 
+
+ 
+
+Step 4 - Set up VBXE XDL 
+
+Here is a code snippet of a routine(s) written in MADS assembly to setup the VBXE XDL:
+
+ 
+
+;*********************************************************
+; proc name:  setup_vbxe_xdl
+; purpose:    the XDL defines the screen type 
+;             resolution, scanlines and other 
+;             copy xdl data to MEMAC memory window
+;             and setup xdl addressed in the vbxe memory 
+;             address space 
+;*********************************************************
+.proc setup_vbxe_xdl 
+
+  ; since we're using a standard resolution screen 
+  ; with 320x192 pixels, and each pixel takes 1 byte
+  ; the standard resolution screen will take 
+  ; the address space $000000-$00EFFF (size of $F000) 
+  ; in the VBXE memory address space
+  ; so anything else beside the screen memory 
+  ; should be above this address (above $00F000)
+  ; to set this address we need to select the proper bank
+  ; each bank is aligned to $1000 
+  ; set XDL to the $00F000 address
+  ; select bank $0F where the XDL will reside
+  ; and enalbe the MEMAC-A window  
+
+  ; store current bank for later use
+  mva #$0F VBXE_CURRENT_BANK
+
+  ldy #VBXE_MEM_BANK_SEL
+  lda VBXE_CURRENT_BANK
+  clc 
+  adc #MEMAC_GLOBAL_ENABLE
+  sta (VBXE_BASE_ADDR),y 
+
+  ; copy the xdl data into the MEMAC-A window address space
+  ; then set the XDL address to point to the VBXE address
+  ; space that will be used for the XDL
+
+  ldx #(XDL_DATA_LEN-1)
+loop
+  lda XDL_DATA,x 
+  sta VBXE_MEMC_WINDOW,X 
+  dex 
+  bpl loop 
+
+  ; as explained above, the XDL in VBXE address space will
+  ; reside in $00F000 and on
+  ; but the XDL data was copied to the MEMAC-A window address
+
+  ldy #VBXE_XDL_ADR0      ; low byte
+  lda #$00
+  sta (VBXE_BASE_ADDR),y	
+  ldy #VBXE_XDL_ADR1      ; mid byte
+  lda #$F0                  
+  sta (VBXE_BASE_ADDR),y	
+  ldy #VBXE_XDL_ADR2      ; high byte
+  lda #$00
+  sta (VBXE_BASE_ADDR),y	
+
+  rts 
+.endp ;setup_vbxe_xdl
+
+
+;-----------------------------------------
+; XDL definition
+XDL_DATA 
+  ; top part of screen, overscan lines
+  ; no overlay and repeat for 23 lines
+  dta XDLC_OVOFF | XDLC_MAPOFF | XDLC_RPTL ; first byte 
+  dta $0                     ; second byte, not used here
+  dta $17                    ; repeat data $17=23
+
+  ; main part of the screen the
+  ; graphics mode, repeat for 192 scanlines 
+  ; setting overlay address $000000 and step
+  dta XDLC_GMON | XDLC_MAPOFF | XDLC_RPTL | XDLC_OVADR ; first byte
+  dta XDLC_ATT  | XDLC_END   ; second byte
+  dta $BF         ; repeat $BF=191 
+  dta $00         ; overlay address $000000
+  dta $00
+  dta $00 
+  dta $40        ; step $140=320 pixels per line
+  dta $01
+  dta XDLC_ATT_OV_WIDTH_NORMAL | XDLC_ATT_OV_PALETTE_01   ; NORMAL = 320 pixel, and VBXE window takes colors from palette 1
+  dta XDLC_ATT_MAIN_PRIORITY_OVERLAY_ALL
+
+XDL_DATA_LEN equ *-XDL_DATA
+
+This example demonstrate the concept of VBXE and the use of XDL.
+
+In my memory layout, the VBXE screen is located at VBXE addresses $000000 till $00F000.
+
+The XDL should reside immediate after at address $00F000. in order to point to the address $00F000 , we need to switch the VBXE memory access to "point" to this address. we do this by bank selection (switching to bank $0F). We copy the XDL to reside in this address $00F000 and we set the VBXE XDL address registers to point to this address (3 bytes = low , mid, high)
+
+ 
+
+This example what comprises the XDL. The XDL "describes" the VBXE screen that will be used. in my example the screen has 2 parts. a top overscan part (24 scanlines) with no VBXE usage and a standard resolution screen 320x192 pixels, where the VBXE screen address for this screen is set to $000000 VBXE address space, and it will use palette #1 (and not #0 as the we want ANTIC mode 4 playfield colors to still be changed with the ANTIC PF registers) , we also define the VBXE screen priority to be on top of everything else (PMGs and PFs).
+
+ 
+
+in XDL, you first define the XDL controls (XDLC) which are basically the attributes you wish to use, then you set the values for these attributes.
+
+  
+
+      Quote
+
+      dta XDLC_OVOFF | XDLC_MAPOFF | XDLC_RPTL ; first byte 
+      dta $0                     ; second byte, not used here
+      dta $17                    ; repeat data $17=23
+
+The first byte sets the XDL controls:
+
+VBXE overlay off - no VBXE usage
+
+MAPOFF=disable the color map
+
+RPTL = repeating it for 23 next scanlines
+
+The second byte also sets XDL controls, but i don't need any here so not in use 
+
+The third byte sets the control values:
+
+RPTL =repeat 23 more scanlines all together 24
+
+ 
+
+      Quote
+
+      dta XDLC_GMON | XDLC_MAPOFF | XDLC_RPTL | XDLC_OVADR ; first byte
+      dta XDLC_ATT  | XDLC_END   ; second byte
+      dta $BF         ; repeat $BF=191 
+      dta $00         ; overlay address $000000
+      dta $00
+      dta $00 
+      dta $40        ; step $140=320 pixels per line
+      dta $01
+      dta XDLC_ATT_OV_WIDTH_NORMAL | XDLC_ATT_OV_PALETTE_01   ; NORMAL = 320 pixel, and VBXE window takes colors from palette 1
+      dta XDLC_ATT_MAIN_PRIORITY_OVERLAY_ALL
+    Expand  
+
+GMON=set graphics mode rather than text mode with fonts and charset(s)
+
+MAPOFF=disable color attributes
+
+RPTL = repeat scanlines $BF = 191 lines , in total 192. (always use Desired-1)
+
+OVADR = the VBXE screen start address (3 bytes) $00-00-00. 
+
+ATT = other screen attributes such as screen width normal (320 pixels) and palette use (#1) and priority (over all)
+
+END = the last XDL line to indicate its end. will wait for VBLANK and then start again from the top of XDL (same as in ANTIC display list)
+
+ 
+
+Step 5 - Set up VBXE Palette 
+
+Here is a code snippet of a routine(s) written in MADS assembly to setup the VBXE XDL:
+
+ 
+
+;*********************************************************
+; proc name:  setup_vbxe_palette
+; purpose:    copy the rgb palette bin file
+;             data into VBXE memory 
+;*********************************************************
+.proc setup_vbxe_palette
+
+  ; the sprite sheet data contains rgb color data as well
+  ; this is reflected in the palette bin file
+  ; copy the palette bin file data into VBXE rgb registers
+  ; the rgb bin file contains 256 values for 
+  ; r,g and b respectively, we copy all of them 
+  ; start from palette 1 and color 0
+  ; palette 1 as we want to use ANTIC background under
+  ; the VBXE and if you choose palette 0 it impact the 
+  ; playfield colors of ANTIC
+
+  ; select palette 1
+  ldy #VBXE_PSEL
+  lda #1
+
+  sta (VBXE_BASE_ADDR),y 
+
+  ; select color 0 
+  ldy #VBXE_CSEL
+  lda #0 
+  sta (VBXE_BASE_ADDR),y 
+
+  ; loop all rgb values
+  ldx #0
+
+loop_rgb
+  ; red 
+  ldy #VBXE_CR
+  lda	palette_bin,x 
+  sta (VBXE_BASE_ADDR),y 
+  ; green 
+  ldy #VBXE_CG 
+  lda palette_bin+$100,x 
+  sta (VBXE_BASE_ADDR),y 
+  ; blue
+  ldy #VBXE_CB 
+  lda palette_bin+$100+$100,x 
+  sta (VBXE_BASE_ADDR),y 
+
+  ; color selection (VBXE_CSEL) will increment automatically
+  inx 
+  bne loop_rgb
+
+  rts 
+.endp ;setup_vbxe_palette
+
+ 
+
+The code sets the palette to 0 and copy the RGB bin array into the colors registers. there are 256 Reds, 256 Greens, 256 Blues. that is why i use + $100 between each color register.   
+
+What is the palette? Well, it is the RGB color list that our graphics will use in the VBXE screen. since I am using VBXE to blit sprite on screen, the palette should be the RGB list of colors of the sprite frames. my project contains a file called palette_monster.bin. This file was extracted from my sprite sheet image using a python script. the script reads each pixel in the image and creates the RGB list and convert it into 1 byte array. then you need to copy this byte array of RGB colors into the VBXE palette registers. so first you chose to which palette you want to assign these colors RGBs. I chose palette #1. the reason for that is since i am blitting the sprite over ANTIC mode 4 background, I want to still be able to change the PF colors of that background fields. If I would have chosen palette #0 then the PF color registers would have impacted by the RGB color list I have loaded and that is not good. you also need to set the transparent color RGB. so in my example the sprite is drawn over the ANTIC mode 4 background. I chose black to be the transparent color. Black RGB is 0,0,0. I needed to make sure it was set as the first color in the palette (python script did that) in order for the VBXE use that as the transparency color.
+
+ 
+
+Step 6 - Set up VBXE clear screen blitter  
+
+Here is a code snippet of a routine(s) written in MADS assembly to setup the VBXE clear screen blitter:
+
+ 
+
+;*********************************************************
+; proc name:  setup_vbxe_clear_screen_bcb
+; purpose:    set up the ZP_SRC to bcb clear screen data
+;             set up the vbxe address to $00F00E
+;             the bank will be $0F as the MEMAC window is set 
+;             to 4K size so all banks addresses are 
+;             aligned with $1000 
+;*********************************************************
+.proc setup_vbxe_clear_screen_bcb
+  ; copy the blitter address to ZP source varialbe 
+  mwa #BCB_CLEAR_SCREEN ZP_SRC
+
+  ; set blitter block to $00F00E
+  mva #$0E VBXE_MEM_ADDR
+  mva #$F0 VBXE_MEM_ADDR+1
+  mva #$00 VBXE_MEM_ADDR+2
+
+  jsr setup_vbxe_blitter_block
+
+  rts
+.endp ;setup_vbxe_clear_screen_bcb
+
+
+;*********************************************************
+; proc name:  setup_vbxe_blitter_block
+; purpose:    you need to set before calling this proc
+;             ZP_SRC and 3 bytes for VBXE_MEM_ADDR    
+;             from the VBXE 3 bytes address 
+;             we take the bank , and set it 
+;             and we set the ZP_DST 
+;             and the 3 bytes blitter address 
+;*********************************************************
+.proc setup_vbxe_blitter_block
+  ; source was set before the call to this proc
+  ; set the destination 
+  ; the VBXE address is with this format ex. $00-F0-00
+  ; we need to get the half part of the high byte
+  ; and half part of the mid byte to select the proper
+  ; VBXE bank  
+
+  ; load mid byte 
+  lda VBXE_MEM_ADDR+1 
+  ; store it temporary 
+  sta ZP_TMP
+  ; load high byte 
+  lda VBXE_MEM_ADDR+2
+  ; 4 shifts 4 rolls to get the half byte and half byte  
+  asl ZP_TMP 
+  rol 
+  asl ZP_TMP 
+  rol 
+  asl ZP_TMP 
+  rol 
+  asl ZP_TMP 
+  rol 
+
+  ; select the bank for this address of VBXE
+  ; restore current bank back 
+  ldy #VBXE_MEM_BANK_SEL
+  ; acc holds the bank  
+  clc 
+  adc #MEMAC_GLOBAL_ENABLE
+  sta (VBXE_BASE_ADDR),y 
+
+  ; we need to add to the MEMAC-A window the offset 
+  ; of the VBXE address 
+  lda VBXE_MEM_ADDR
+  sta ZP_DST 
+  lda VBXE_MEM_ADDR+1
+  ; extrac the 3rd digit 
+  and #$0F 
+  ora #>VBXE_MEMC_WINDOW
+  sta ZP_DST+1 
+
+  ; loop copy
+  ldy #BCB_SIZE-1
+
+copy_loop
+  lda (ZP_SRC),y
+  sta (ZP_DST),y
+  dey
+  bpl copy_loop
+
+  ; set the blitter address in VBXE memory address space
+  ; VBXE_MEM_ADDR
+  ldy #VBXE_BL_ADR0 ; low byte
+  lda VBXE_MEM_ADDR 
+  sta (VBXE_BASE_ADDR),y 
+
+  ldy #VBXE_BL_ADR1 ; mid byte
+  lda VBXE_MEM_ADDR+1   
+  sta (VBXE_BASE_ADDR),y 
+
+  ldy #VBXE_BL_ADR2 ; high byte
+  lda VBXE_MEM_ADDR+2 
+  sta (VBXE_BASE_ADDR),y 
+
+  ; restore current bank back 
+  ldy #VBXE_MEM_BANK_SEL
+  lda VBXE_CURRENT_BANK  
+  clc 
+  adc #MEMAC_GLOBAL_ENABLE
+  sta (VBXE_BASE_ADDR),y 
+
+  rts 
+.endp ;setup_vbxe_blitter_block
+
+;-----------------------------------------------
+; blit data for clear screen
+;-----------------------------------------------
+BCB_CLEAR_SCREEN 
+  ; BCB is 21 bytes long
+  ; 3 bytes = no source - ignored 
+  dta $00
+  dta $00
+  dta $00
+  ; step Y - each change of Y - ignored
+  dta a($0000) 
+  ; step X - each change of X - ignored 
+  dta $0
+  ; the address of the VBXE screen top left
+  dta $00
+  dta $00
+  dta $00
+  ; step Y - screen width in pixels $140 (320) 
+  dta a($140)
+  ; step X - 1 pixel 
+  dta $01
+  ; width of blitter to copy  
+  dta a($140 - 1) 
+  ; height of blitter to copy 
+  dta $C0-$1 
+  ; AND mask for source
+  dta $00
+  ; XOR mask for source
+  dta $00
+  ; AND mask collision detection - ignored
+  dta $00 
+  ; ZOOM value X-Axis Y-Axis - ignored
+  dta $00
+  ; Pattern fill - ignored
+  dta $00
+
+  ; blt ctrl - ignored
+  dta $00
+
+BCB_SIZE equ 21
+
+What is a blitter? Well, it is a fast way to copy things into memory. the usages are mostly to erase, update and draw the graphics on the VBXE screen.
+
+The way the blitter work, is you define a blitter control block and you copy it into the VBXE  address space and then set the blitter address to point to the VBXE address space where the blitter resides. In order to copy the blitter into the VBXE address space you will need 2 parameters: source=blitter data to copy
+
+destination=the VBXE memory address where the blitter block will reside.
+
+ 
+
+This code example for clear screen is used to clear the entire VBXE visible screen. and that means, we place transparent color ($00) into the screen memory of the visible VBXE screen which is from address $000000 to $00F000 (320x192 pixels) 
+
+ 
+
+Source = our blitter block data 
+
+Destination= VBXE memory , $00F00E. why do we place it at $00F00E? if you recal we have placed the XDL in the address $00F000. XDL size is with the size of $0D. so we can use $0E low byte as the right place to set the blitter block. we use a zero page address (3 bytes) and we store in it the high, mid and low parts of the address to be used to copy the blitter.
+
+As explained in early steps, to access memory we need to switch the bank to point to that memory. in our case the bank is $0F as before. but since my code can interpret any address, we extract the bank from the zero page 3 byte address.  
+
+ 
+
+We select the proper Bank and also we make sure the MEMAC memory access is enabled (we add this flag to the select bank register).
+
+We set the destination in the MEMAC-A access memory to the same offset as we explained above ($0E).
+
+We loop and copy the data from source to destination. last thing remaining to do is point the blitter block register to the correct address space in VBXE (including the offset $0E). 
+
+ 
+
+      Quote
+
+    ; BCB is 21 bytes long
+      ; 3 bytes = no source - ignored 
+      dta $00
+      dta $00
+      dta $00
+      ; step Y - each change of Y - ignored
+      dta a($0000) 
+      ; step X - each change of X - ignored 
+      dta $0
+      ; the address of the VBXE screen top left
+      dta $00
+      dta $00
+      dta $00
+      ; step Y - screen width in pixels $140 (320) 
+      dta a($140)
+      ; step X - 1 pixel 
+      dta $01
+      ; width of blitter to copy  
+      dta a($140 - 1) 
+      ; height of blitter to copy 
+      dta $C0-$1 
+      ; AND mask for source
+      dta $00
+      ; XOR mask for source
+      dta $00
+      ; AND mask collision detection - ignored
+      dta $00 
+      ; ZOOM value X-Axis Y-Axis - ignored
+      dta $00
+      ; Pattern fill - ignored
+      dta $00
+
+      ; blt ctrl - ignored
+      dta $00
+
+     
+
+     
+
+    BCB_SIZE equ 21
+    Expand  
+
+Each blitter block is always 21 bytes long. 
+
+source address 3 byte = ignored, as we're clearing the screen there is no source
+
+step y 2 bytes = for source, also ignored
+
+step x 1 bytes = for source, also ignored
+
+add 3 bytes = top left of the VBXE screen (in our case $000000)
+
+step y 2 bytes = for our screen, 320 pixels ($140, we always do Desire-1)
+
+step x 1 bytes = for our screen, 192 ($C0, we always do Desire-1)
+
+AND mask = not in use as we do not have source. keep it $00
+
+XOR mask = the desired outcome, we want to place the transparent color $00 in each byte. so we XOR with this color 
+
+COLLISION mask = ignored . keep $00
+
+ZOOM = ignored. keep $00. you can use zoom for faster memset operation, but i am not using it here.
+
+PATTERN FILL= ignored. keep $00
+
+BLT CONTROL=ignored. keep $00
+
+ 
+
+Step 7 - Start the blitter  
+
+Here is a code snippet of a routine(s) written in MADS assembly to setup the VBXE clear screen blitter:
+
+ 
+
+;*********************************************************
+; proc name:  start_blitter
+; purpose:    once blitter is free (not busy)
+;             start 
+;*********************************************************
+.proc start_blitter 
+  ; first wait for blitter busy to finish
+  jsr wait_for_blitter
+
+  ldy #VBXE_BLITTER_START
+  lda #$01 
+  sta (VBXE_BASE_ADDR),y 
+
+  rts 
+
+.endp ; start_blitter
+
+;*********************************************************
+; proc name:  wait_for_blitter
+; purpose:    read the register BLITTER BUSY 
+;             and wait till its not busy anymore
+;*********************************************************
+.proc wait_for_blitter
+  ; read the blitter busy register
+  ; if it is 0 -->it is ready  
+  ldy #VBXE_BLITTER_BUSY
+do_wait
+  lda (VBXE_BASE_ADDR),y
+  bne do_wait 
+
+  rts
+.endp ; wait_for_blitter
+
+ 
+
+There could be other blitters at work, so we must wait until blitter is ready to be used. 
+
+we test the blitter busy register (base + $53) , read operation, and when it is 0 the blitter is ready to process another block.
+
+to start the blitter we set 1 to the blitter start register (base + $53), this time write operation.  
+
+ 
+
+Note: It is recommended to clear the screen before your main loop and do it one time only. If you don't clear your screen, you may see garbage appearing and that is not desired. 
+
+ 
+
+Step 8 - copy sprite sheet data into VBXE memory
+
+Here is a code snippet of a routine(s) written in MADS assembly to setup the VBXE clear screen blitter:
+
+ 
+
+;*********************************************************
+; proc name:  setup_vbxe_sprite_data
+; purpose:    copy the sprite bin file data 
+;             into MEMAC-A window memory 
+;             take into account the MEMAC-A window size
+;             you have defined and see if the sprite sheet
+;             does not exceed that
+;*********************************************************
+.proc setup_vbxe_sprite_data
+
+  ; copy the sprite into the MEMAC-A VBXE address
+  ; the offset needs to take into account the XDL
+  ; and the blitter blocks so we set the address
+  ; to be the MEMAC-A window address + $100 as offset
+  ; $100 is enough as we only have 2 blitter blocks  
+  ; that takes 2x21 = 42 bytes
+
+  ; set the bin file hi byte address 
+  ; into a ZP source variable
+  mwa #sprite_data ZP_SRC 
+
+  ; set the MEMAC-A window + offset($100) address  
+  ; into a ZP destination variable 
+  lda #0
+  sta ZP_DST 
+  lda #>(VBXE_MEMC_WINDOW + $100)
+  sta ZP_DST + 1
+
+  ; loop sprite height 
+  ldx #SPRITE_HEIGHT
+copy_sprite_row_loop
+  ldy #SPRITE_HEIGHT-1
+copy_sprite_byte_loop
+  lda (ZP_SRC),y
+  sta (ZP_DST),y
+  dey
+  bpl copy_sprite_byte_loop
+  clc
+  lda ZP_SRC
+  adc #SPRITE_WIDTH
+  sta ZP_SRC
+  lda ZP_SRC + 1
+  adc #0
+  sta ZP_SRC + 1
+
+  clc
+  lda ZP_DST 
+  adc #SPRITE_WIDTH
+  sta ZP_DST 
+  lda ZP_DST + 1
+  adc #0
+  sta ZP_DST + 1
+
+  dex
+  bne copy_sprite_row_loop
+
+  rts 
+.endp ;setup_vbxe_sprite_data
+
+We copy the sprite sheet data into the MEMAC-A memory access area, so we can later create a blitter block to blit it on screen
+
+I've placed it in MEMAC-A memory + $100 as it was enough right after XDL and 2 blitter blocks (one will be listed in the next steps). you can use offset at the exact memory point right after XDL ($0D) blitter 1 ($23) blitter 2 ($38) so you could place it in base+$39 if you want.
+
+ 
+
+source = sprite data. what is that? it is a bin file created outside the program using python again and basically reading the image and getting the pixels from it and storing it in a byte array. we copy the byte array into MEMAC-A memory access addresses. each sprite has a width and a height. there could be several frames per sprite in one sprite sheet. It is recommended to set all your sprite of the game in one sheet so you can set the color palette and sprite data once. 
+
+destination=MEMAC-A memory access + $100. 
+
+ 
+
+Now whenever we want we can blit this sprite onto the screen.
+
+ 
+
+Step 9 - blit sprite on VBXE screen 
+
+Here is a code snippet of a routine(s) written in MADS assembly to setup the VBXE clear screen blitter:
+
+ 
+
+;*********************************************************
+; proc name:  setup_vbxe_sprite_draw_bcb
+; purpose:    set up the ZP_SRC to bcb sprite draw data
+;             set up the vbxe address to $00F023
+;             each blitter block is 21 bytes and last
+;             block was set to $00F00E
+;             the bank will be $0F again as the MEMAC window is set 
+;             to 4K size so all banks addresses are 
+;             aligned with $1000 
+;*********************************************************
+.proc setup_vbxe_sprite_draw_bcb
+
+  ; copy the blitter address to ZP source varialbe 
+  mwa #BCB_SPRITE_DRAW ZP_SRC
+
+  ; set blitter block to $00F00E
+  mva #$23 VBXE_MEM_ADDR
+  mva #$F0 VBXE_MEM_ADDR+1
+  mva #$00 VBXE_MEM_ADDR+2
+
+  jsr setup_vbxe_blitter_block
+
+  rts
+.endp ;setup_vbxe_sprite_draw_bcb 
+
+;-----------------------------------------------
+; blit data for "sprite"
+;-----------------------------------------------
+BCB_SPRITE_DRAW
+  ; BCB is 21 bytes long
+  ; 3 bytes = address of the sprite data we are copying
+  ; our sprite resides in VBXE memory $00F100
+  dta $00
+  dta $F1
+  dta $00
+  ; step Y - sprite width for each change of Y
+  dta a(SPRITE_WIDTH)
+  ; step X - step 1 byte each change of X
+  dta $1
+  ; the address of middle of the VBXE visible screen
+  dta $80
+  dta $50
+  dta $00
+  ; step Y - screen width in pixels $140 (320) 
+  dta a($140)
+  dta $1
+  ; width of blitter to copy  
+  dta a(SPRITE_WIDTH - 1)
+  ; height of blitter to copy 
+  dta SPRITE_HEIGHT - 1
+  ; AND mask for source
+  dta $FF
+  ; XOR mask for source
+  dta $00 
+  ; AND mask collision detection
+  dta $00 
+  ; ZOOM value X-Axis Y-Axis
+  dta $00
+  ; Pattern fill 
+  dta $00
+  dta $01
+
+So once again we create a blitter block this time to copy the sprite data from MEMAC-A + $100 memory space to the VBXE screen address space.
+
+let's review the blitter block: (Each blitter block is always 21 bytes long) 
+
+source address 3 byte = now our source will be our sprite data in VBXE memory address space ($00F100) 
+
+step y 2 bytes = sprite width  (always use Desired-1)
+
+step x 1 bytes = always 1 pixel ($1)
+
+add 3 bytes = destination middle of the VBXE screen (in our case $005080)
+
+step y 2 bytes = step of the scree ($140=320 pixels) to move to the next row to draw the sprite. 
+
+step x 1 bytes = always 1 pixel ($1)
+
+AND mask = $FF, in order not to change the sprite data 
+
+XOR mask = $00, in order not to change the sprite data 
+
+COLLISION mask = ignored . keep $00
+
+ZOOM = ignored. keep $00. 
+
+PATTERN FILL= ignored. keep $00
+
+BLT CONTROL=$1 , the main blitter mode. copy source to destination
+
+ 
+
+Don't forget to call:
+
+ 
+
+   jsr start_blitter
+
+ 
+
+In order to start the blitter. 
+
+ 
+
+Other things in my example to consider
+
+The DLIST is ANTIC mode 4. the background charset and map are bin files exported from charpad app. 
+
+ 
+
+Here is the zipped source code.
+
+vbxe_step_by_step_example.zip 9.8 kB · 75 downloads   
+
+ 
+
+Just run build command in your IDE and that will compile and runt the example.
+
+ 
+
+Special thanks to @popmilo who helped me creating this demo. 
+
+and also to @phaeronwho helped me overcome some of my hurdles.
+
+ 
+
+Hope it will be beneficial to you.
+
+ 
+
+Cheers,
+
+Yaron
+Edited January 31, 2023 by Yaron Nir
+
+    Piotr D. Kaczorowski, Cyprian, rayr and 7 others
+    Like 5
+    Thanks 5
+
+Like
+
+    Quote
+
+_The Doctor__
+
+    _The Doctor__ Quadrunner
+    Members
+        17,232 posts
+    Flux Capacitor Master Craftsman Sometimes you WIN!
+    Location:10-0-11-00:02
+
+    Report
+
+Posted January 31, 2023
+
+maybe you could show us the step by step of the two or so games you are working on, getting use of all aspects a 3 for.
+
+WonderBoy a Journey into programming with MADS...
+
+WonderBoyVBXE a Journey into video extension programming with MADS
+
+etc etc. then your are teaching/tutoring while completing your projects at the same time.
+Like
+
+    Quote
+
+_The Doctor__                ebay can & will eat your lunch if you are Not a top seller w/discounts, bonuses & free listings!
+
+ connect  to  #Atari  irc  through  telnet  middlebox  at          irc.atarinet.com 400      for ascii
+
+Don't treat people like a football is all I'm saying.......            irc.atarinet.com 800      for vt100, ansi, and ICE-T !!
+Yaron Nir
+
+    Yaron Nir Dragonstomper
+    Members
+        508 posts
+
+    Author
+
+    Report
+
+Posted January 31, 2023
+
+     
+    On 1/31/2023 at 4:36 PM, _The Doctor__ said:
+
+    maybe you could show us the step by step of the two or so games you are working on, getting use of all aspects a 3 for.
+
+    WonderBoy a Journey into programming with MADS...
+
+    WonderBoyVBXE a Journey into video extension programming with MADS
+
+    etc etc. then your are teaching/tutoring while completing your projects at the same time.
+
+that is a nice thought.
+
+I am just experiencing with VBXE so not sure if and how this will go for a full game.
+
+wonderboy is in progress but going slowly as there are others involved in this project and there are some setbacks.
+
+dragon master is almost ready - for level 1 and once i will be done with VBXE i will release it.
+
+ 
+
+    _The Doctor__
+    Like 1
+
+Like
+
+    Quote
+
+Yaron Nir
+
+    Yaron Nir Dragonstomper
+    Members
+        508 posts
+
+    Author
+
+    Report
+
+Posted January 31, 2023
+
+i am gradually editing the steps that is why you see partial work in the first post.
+
+i will send a final message once the steps are done
+
+ 
+
+    _The Doctor__ and Thelen
+    Like 1
+    Thanks 1
+
+Like
+
+    Quote
+
+Yaron Nir
+
+    Yaron Nir Dragonstomper
+    Members
+        508 posts
+
+    Author
+
+    Report
+
+Posted January 31, 2023
+
+Ok, steps are completed. source code also attached.
+
+ 
+
+    Hrivis, popmilo and Thelen
+    Like 2
+    Thanks 1
+
+Like
+
+    Quote
+
+    2 years later...
+
+Piotr D. Kaczorowski
+
+    Piotr D. Kaczorowski Stargunner
+    Members
+        1,093 posts
+    Faculty of Electronics, WUT
+    Location:Warsaw / Poland
+
+    Report
+
+Posted February 10, 2025
+
+@Yaron Nir
+
+ 
+
+Thank you for this tutorial.
+
+ 
+
+I've just converted SDX SVBXE Driver documentation to the modern form.  Turbo Basic XL examples included in ASCII format:
+
+https://github.com/peterkaczorowski/sdx_svbxe_driver
+Like
+
+    Quote
+
+Software and Electronics Engineer / Institute of Electronic Systems @  Faculty of Electronics and Information Technology @ Warsaw University of Technology
+
+?? https://github.com/peterkaczorowski ?? www.theatarian.com ?? www.atarionline.eu 
+drac030
+
+    drac030 River Patroller
+    Members
+        2,931 posts
+    Location:Warszawa, Poland
+
+    Report
+
+Posted February 11, 2025 (edited)
+
+     
+    On 2/10/2025 at 11:31 PM, Piotr D. Kaczorowski said:
+
+    I've just converted SDX SVBXE Driver documentation to the modern form.
+
+I do not think I like several things about it:
+
+ 
+
+1) I am the author of the two text files you used. You have not asked me beforehand for permission to do such a conversion. It is not illegal, however, it is some sort of minimum politeness we expect.
+
+ 
+
+2) The "modern form" looks to me more like a crippled one: the original (S_VBXE.MAN + XIO.TXT) consists of nearly 25 KB of text. What I see there is about one third of the original contents, cut down arbitrarily to your liking / understanding.
+
+ 
+
+3) That crippled form is signed with my name.
+
+ 
+
+4) You have exposed my e-mail address to web crawlers - again, without my permission (fortunately, the address in the original MAN file you have used is false by apparent slip of my memory).
+Edited February 11, 2025 by drac030
+
+    _The Doctor__, Stephen, Piotr D. Kaczorowski and 1 other
+    Like 4
+
+Like
+
+    Quote
+
+KMK
+
+IDE+ firmware, Rapidus Accelerator firmware/software, ELSA, SysInfo, U-BASIC, SIO2BSD
+
+SpartaDOS X Upgrade Project
+Piotr D. Kaczorowski
+
+    Piotr D. Kaczorowski Stargunner
+    Members
+        1,093 posts
+    Faculty of Electronics, WUT
+    Location:Warsaw / Poland
+
+    Report
+
+Posted February 11, 2025
+
+     
+    On 2/11/2025 at 12:49 AM, drac030 said:
+
+    I do not think I like several things about it:
+
+     
+
+    1) I am the author of the two text files you used. You have not asked me beforehand for permission to do such a conversion. It is not illegal, however, it is some sort of minimum politeness we expect.
+
+     
+
+    2) The "modern form" looks to me more like a crippled one: the original (S_VBXE.MAN + XIO.TXT) consists of nearly 25 KB of text. What I see there is about one third of the original contents, cut down arbitrarily to your liking / understanding.
+
+     
+
+    3) That crippled form is signed with my name.
+
+     
+
+    4) You have exposed my e-mail address to web crawlers - again, without my permission (fortunately, the address in the original MAN file you have used is false by apparent slip of my memory).
+    Expand  
+
+ 
+
+Ah... I rushed. Sorry. I have set the repository to private until we determine what to do next with it: delete it, modify something – add, remove, rewrite, transfer it to your GitHub – I'm generally open to these matters. The documents have been transcribed exactly as they are (at least I believe so), and the examples have been converted from ATASCII to ASCII.
+
+ 
+
+Of course, you're right that I should have asked for permission first, and my action was solely driven by the routine practice that archives can be cloned on GitHub repositories. Naturally, the codes were not on GitHub.
+
+ 
+
+I hope you understand that this was only about spreading awareness and nothing more. My mistake. Next time, I'll ask first.
+
+ 
+
+ 
+
+    drac030, JAC! and kenjennings
+    Like 2
+    Thanks 1
+
+Like
+
+    Quote
+
+Software and Electronics Engineer / Institute of Electronic Systems @  Faculty of Electronics and Information Technology @ Warsaw University of Technology
+
+?? https://github.com/peterkaczorowski ?? www.theatarian.com ?? www.atarionline.eu 
+
+    1 month later...
+
+PPR
+
+    PPR Space Invader
+    Members
+        31 posts
+    Location:Germany
+
+    Report
+
+Posted March 14, 2025
+
+Hello guys,
+
+i am just working on "understanding" the vbxe. Thanks for the tutorial.
+
+I am now on the point to initialize memac and my question is about the syntax to have the banks in MADS/Eclipse.
+
+Is it similar to the bank syntax of the 130 xe? Can i use the vbxe memory area for coding? A small example in MADS/Exlipse would be helpful...
+
+Many thanks and greeting from Hamm...
+
+Peter
+Like
+
+    Quote
+
+Rybags
+
+    Rybags Quadrunner
+    Members
+        19,763 posts
+    Location:Australia
+
+    Report
+
+Posted March 14, 2025
+
+Ram by MEMAC (both types) can be used for code or Antic graphics, though generally needs to be switched in.
+
+The documentation should describe order of precedence.  Also note operational differences between Cores using R or A suffix.
+
+ 
+
+Also, a useful aspect of MEMAC is that you can (sort of) emulate cartridges.  Some time back I made a Mac-65 executable that loads into VBXE VRam and operates like the OSS cartridge.
+Like
+
+    Quote
+
+Moon Cresta for VBXE    Stellar Shuttle 480i    Real Interlace (480i) demo on the Atari
+
+ 
+PPR
+
+    PPR Space Invader
+    Members
+        31 posts
+    Location:Germany
+
+    Report
+
+Posted March 14, 2025
+
+thanks for this fast answer... how to programm it in practise - i didn´t found anything...  
+
+ 
+
+in Mads/ Eclipse to initialize the banks i use:
+
+ 
+
+; Speicher reservieren
+PMB DTA "0123456789"
+
+; Definitionen der Banken an PORTB
+DTA B($Ff) ; Keine Bank
+DTA B($C3) ; Bank 1
+DTA B($C7) ; Bank 2
+DTA B($cb) ; Bank 3
+DTA B($Cf) ; Bank 4
+
+TMB .by $ff,$c3,$c7,$cb,$c
+
+ 
+
+........
+
+ 
+
+;and the banks:
+
+ 
+
+..........
+
+
+;------------------------- Bank 0 Player-Set 1 -------------
+ORG PMB ; $ff
+LDA TMB+0 ; Bank 0 auswählen
+STA PORTB
+RTS
+INI PMB
+
+org $4000
+
+
+.proc test1
+rts
+.endp
+
+
+ORG PMB ;------------------------- Bank 1 --------------
+LDA TMB+1 ; Bank 1 auswählen $c3
+STA PORTB
+RTS
+INI PMB
+
+ORG $4000
+
+.proc test2
+rts
+.endp
+
+
+
+ORG PMB ;------------------------- Bank 2 --------------
+LDA TMB+2 ; Bank 2 auswählen $c7
+STA PORTB ; 2. Phase und Intro
+RTS
+INI PMB
+
+ORG $4000
+
+
+
+
+ORG PMB ;------------------------- Bank 3 --------------
+LDA TMB+3 ; Bank 3 auswählen $cb
+STA PORTB ; 3. Phase und Extro
+RTS
+INI PMB
+
+ORG $4000
+....
+
+ 
+
+is this similar to vbxe using vbxe-Registers?
+ 
+Like
+
+    Quote
+
+w1k
+Reply to this topic...
+Go to topic listing
+Next unread topic
+
+    Recently Browsing   1 Member
+        w1k 
+
+    Unread Content
+    Mark site read
+
+    Home
+    Atari Systems
+    Atari 8-Bit Computers
+    Atari 5200 / 8-bit Programming
+    VBXE - a step by step code example in MADs assembly
+
+    Theme Privacy Policy Contact Us Cookies 
+
+Powered by Invision Community
+AtariAge
+
+    Home
+    2600
+    5200
+    7800
+    Lynx
+    Jaguar
+
+Forums
+
+    Forum Home
+    Clubs
+    Blogs
+    Gallery
+    Subscriptions
+
+Store
+
+    Store Home
+    New Products
+    Bestsellers
+    Gift Certificates
+
+General
+
+    Contact
+    Submit News
+    Privacy Policy
+    Legal
+
+Follow AtariAge
+
+    Facebook  Like us on Facebook
+    Facebook  AtariAge Facebook Group
+    Twitter  Follow us on Twitter
+    Instagram  AtariAge on Instagram
+    YouTube  Watch us on YouTube
+    Discord  Chat on Discord
+
+Copyright ©1998-2023 AtariAge

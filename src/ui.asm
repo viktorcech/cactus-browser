@@ -61,6 +61,10 @@ m_help  dta c' #:Link  U:URL  B:Back  Q:Quit  ',0
         beq ?back
         cmp #'B'
         beq ?back
+        cmp #'t'
+        beq ?test
+        cmp #'T'
+        beq ?test
 
         cmp #'0'
         bcc ?loop
@@ -80,6 +84,13 @@ m_help  dta c' #:Link  U:URL  B:Back  Q:Quit  ',0
 ?back   jsr history_pop
         bcs ?loop
         jsr http_navigate
+        jmp ?loop
+
+?test   jsr vbxe_test_image
+        jsr kbd_get            ; wait for keypress
+        jsr vbxe_img_hide      ; restore text
+        jsr ui_init
+        jsr show_welcome
         jmp ?loop
 
 ?link   sec

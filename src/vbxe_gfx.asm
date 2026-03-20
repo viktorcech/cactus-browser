@@ -306,8 +306,11 @@ img_wr_bank    dta b(0)        ; MEMAC B bank number
         asl
         sec
         sbc img_height
-        beq ?no_bottom
-        bmi ?no_bottom
+        beq ?jnb
+        bmi ?jnb
+        jmp ?has_bottom
+?jnb    jmp ?no_bottom
+?has_bottom
         sec
         sbc #1
         pha
@@ -347,11 +350,39 @@ img_wr_bank    dta b(0)        ; MEMAC B bank number
         sta zp_tmp2
         lda zp_tmp1
         lsr                    ; for *128, shift differently
-        ; Simplified: just use VRAM_SCREEN base (approximate)
-        lda #<VRAM_SCREEN
+        ; Calculate VRAM offset for text below image
+        ; Save XDL index
+        stx zp_tmp3
+        ; Row after image = img_row + img_height/8
+        lda img_height
+        lsr
+        lsr
+        lsr
+        clc
+        adc img_row
+        ; Multiply by SCR_STRIDE (160) using addition loop
+        tax
+        lda #0
+        sta zp_tmp1
+        sta zp_tmp2
+        cpx #0
+        beq ?zoff
+?alp    clc
+        lda zp_tmp1
+        adc #<SCR_STRIDE
+        sta zp_tmp1
+        lda zp_tmp2
+        adc #>SCR_STRIDE
+        sta zp_tmp2
+        dex
+        bne ?alp
+?zoff   ; Restore XDL index
+        ldx zp_tmp3
+        ; Write OVADR
+        lda zp_tmp1
         sta MEMB_XDL,x
         inx
-        lda #>VRAM_SCREEN
+        lda zp_tmp2
         sta MEMB_XDL,x
         inx
         lda #0
@@ -390,6 +421,147 @@ img_wr_bank    dta b(0)        ; MEMAC B bank number
 .proc vbxe_img_hide
         lda #0
         sta img_active
+        memb_on 0              ; Enable MEMAC B for XDL write
         jsr setup_xdl          ; Rebuild original text-only XDL
+        memb_off
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
+; vbxe_test_image - Display color bar test pattern
+; Press T in browser to trigger
+; ----------------------------------------------------------------------------
+.proc vbxe_test_image
+        ; Allocate 256x64 test image
+        lda #64                ; height
+        ldx #0                 ; width lo (256 & $FF = 0)
+        ldy #1                 ; width hi (256 >> 8 = 1)
+        jsr vbxe_img_alloc
+        bcc ?alloc_ok
+        rts
+?alloc_ok
+
+        ; Set test palette at indices 8-15 (0-7 used by text)
+        ldy #VBXE_CSEL
+        lda #8
+        sta (zp_vbxe_base),y
+        ldy #VBXE_PSEL
+        lda #1
+        sta (zp_vbxe_base),y
+
+        ; Color 0: black
+        ldy #VBXE_CR
+        lda #0
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        sta (zp_vbxe_base),y
+
+        ; Color 1: red
+        ldy #VBXE_CR
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        lda #0
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        sta (zp_vbxe_base),y
+
+        ; Color 2: green
+        ldy #VBXE_CR
+        lda #0
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        lda #0
+        sta (zp_vbxe_base),y
+
+        ; Color 3: yellow
+        ldy #VBXE_CR
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        lda #0
+        sta (zp_vbxe_base),y
+
+        ; Color 4: blue
+        ldy #VBXE_CR
+        lda #0
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        lda #0
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        lda #$FF
+        sta (zp_vbxe_base),y
+
+        ; Color 5: magenta
+        ldy #VBXE_CR
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        lda #0
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        lda #$FF
+        sta (zp_vbxe_base),y
+
+        ; Color 6: cyan
+        ldy #VBXE_CR
+        lda #0
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        lda #$FF
+        sta (zp_vbxe_base),y
+
+        ; Color 7: white
+        ldy #VBXE_CR
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CG
+        lda #$FF
+        sta (zp_vbxe_base),y
+        ldy #VBXE_CB
+        lda #$FF
+        sta (zp_vbxe_base),y
+
+        ; Write pixel data: 8 vertical color bars, 10px wide each
+        jsr vbxe_img_begin_write
+
+        ldx #64                ; 64 scanlines
+?row    stx zp_tmp1
+        lda #0
+        sta zp_tmp2            ; pixel column counter lo
+        sta zp_tmp3            ; pixel column counter hi
+?col    lda zp_tmp2
+        lsr
+        lsr
+        lsr
+        lsr
+        lsr                    ; /32 gives 8 bars across 256px
+        and #$07
+        clc
+        adc #8                 ; offset to palette 8-15
+        jsr vbxe_img_write_byte
+        inc zp_tmp2
+        bne ?col               ; 256 pixels (wraps at 0)
+        ldx zp_tmp1
+        dex
+        bne ?row
+
+        jsr vbxe_img_end_write
+
+        ; Show image at content row 4 (below title)
+        lda #4
+        jsr vbxe_img_show
         rts
 .endp
