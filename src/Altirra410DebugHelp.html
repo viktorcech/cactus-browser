@@ -1,0 +1,3415 @@
+<html lang='en'>
+<head>
+<title>Altirra 4.10 Debugger Command Reference</title>
+<style>
+hr {border:none;border-top:1px solid darkgray}
+details > summary {cursor:pointer;outline:none;margin-left:2px;padding-left:2px}
+details > summary {list-style:none}
+details > summary::-webkit-details-marker {display:none}
+details > summary:hover {background-color:#DDDDDD}
+details > summary:focus {margin-left:0;border-left:2px solid -moz-mac-focusring}
+details > summary:focus {border-left:2px solid -webkit-focus-ring-color}
+details > summary .cmd {font-weight:bold;display:inline-block;min-width:6em;margin-right:1em}
+</style>
+</head>
+<body>
+<h3>Altirra 4.10 Debugger Command Reference</h3>
+<details>
+<summary>
+<span class='cmd'>`</span>
+Bypass aliases
+</summary>
+<a id='`'>
+<pre>
+    Executes a command without checking the alias table.
+    
+      `&lt;command&gt;
+      
+    Allows access to commands that are blocked by aliases. This also provides an
+    escape hatch if you somehow manage to alias over both the alias set (as) and
+    alias clear (ac) commands.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>~</span>
+Target control
+</summary>
+<a id='~'>
+<pre>
+    Switches or displays information about debugging targets.
+
+      ~                  (Display target list)
+      ~0s, ~1s, ...      (Switch current target)
+
+    The default debugging target is target 0, which is the main computer CPU.
+    When a device that has a coprocessor is present, such as the Veronica
+    cartridge, additional targets will be available.
+
+    Not all commands work with all targets; many are restricted to target 0.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>?</span>
+Evaluate expression
+</summary>
+<a id='?'>
+<pre>
+    Prints the value of an expression.
+    
+      ? &lt;expression&gt;
+      
+    The expression may contain the following elements, from highest to lowest
+    precedence:
+    
+     Constants
+      iii      Integer
+      $hhh     Hex integer
+      %bbbb    Binary integer
+      ii:iiii  Banked address (decimal)
+      $hh:hhhh Banked address (hex)
+
+     Variables
+      pc       PC register
+      x        X register
+      y        Y register
+      s        S register
+      p        P register
+      hpos     ANTIC horizontal position counter
+      vpos     ANTIC vertical position counter
+      address  PC or memory address from current breakpoint
+      value    Value written from current access write breakpoint
+      xbankreg  Bank register value for PORTB extended memory
+      xbankcpu  PORTB extended memory bank (CPU)
+      xbankantic  PORTB extended memory bank (ANTIC)
+      @t0-t9   Temporaries
+      @ra      Return address (if RTS executed immediately)
+      @frame   ANTIC frame counter
+      @clk     Clock cycle counter
+      @cclk    CPU clock cycle counter
+      @xpc     Extended PC (banked memory)
+      @tapepos Tape position in samples
+     
+     Grouping
+      (exp)    Subexpression
+      @(...)   Immediately evaluated subexpression
+      
+     Unary operators
+      db addr  Read memory unsigned byte
+      dsb addr Read memory signed byte
+      dw addr  Read memory unsigned word
+      dsw addr Read memory signed word
+      dsd addr Read memory signed double word (32-bit)
+      +        Unary plus
+      -        Unary minus
+      &lt;        Unary low byte (bits 0-7, as unsigned byte)
+      &gt;        Unary high byte (bits 8-15, as unsigned byte)
+      !        Logical negation
+      
+     Multiplicative operators
+      *        Multiply
+      /        Integer division (truncation toward zero)
+      %        Modulus (a%b = a - a/b*b)
+      
+     Additive operators
+      +        Add
+      -        Subtract
+      
+     Relational operators
+      &lt;        Less-than
+      &lt;=       Less-equal
+      &gt;        Greater-than
+      &gt;=       Greater-equal
+      =        Equal
+      !=       Not equal
+     
+     Bitwise operators 1
+      &amp;        Bitwise AND
+      
+     Bitwise operators 2
+      |        Bitwise OR
+      ^        Bitwise XOR
+      
+     Logical operators 1
+      and      Logical AND
+      
+     Logical operators 2
+      or       Logical OR
+      
+     Ternary operators
+      ?:       Conditional operator
+      
+    Spaces are not significant except to delimit tokens. 
+    
+    Symbol names may also be used in expressions, but care should be taken
+    to distinguish between "symbol", which evaluates to the symbol's address,
+    and "db symbol" or "dw symbol", which reads a byte or word at the address.
+    Symbols that conflict with other tokens can be forced by prefixing with
+    #, i.e. #address. A symbol from a specific module may be referenced with
+    the syntax modname!symname.
+    
+    All expressions are evaluated with 32-bit signed two's-complement integer
+    arithmetic. Logical operators operate according to the rules of the C
+    programming language, where 0 signifies false, a non-zero value is
+    interpreted as true, and true is encoded as 1.
+    
+    Due to a conflict with the bank operator, the ternary operator may
+    sometimes require a space between a constant and the ':' in order to be
+    parsed as intended.
+    
+    Examples:
+    
+      vdslst              Address of DLI vector ($0200)
+      dw vdslst           DLI routine address
+      dw vdslst+2         DLI routine address + 2
+      dw vdslst + 2       DLI routine address + 2
+      dw (vdslst+2)       SIO proceed IRQ routine address
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>a</span>
+Assemble
+</summary>
+<a id='a'>
+<pre>
+    Invoke 6502 miniassembler.
+  
+      a &lt;address&gt;
+    
+    Allows entry of 6502 assembly language code starting at a particular
+    address. Enter one line at a time, and enter a blank line to end.
+    
+    Labels may be entered and referenced; created labels are entered into
+    the custom symbol table. Labels must be defined before use and forward
+    references are not allowed.
+    
+    Auto-increment syntax is allowed: LDA $1000,X+ -&gt; LDA $1000,X / INX
+    
+    Statements may be stacked to share an operand: LDA:RNE VCOUNT
+    
+    Pseudoinstruction macros supported:
+        MVA src dst -&gt; LDA src / STA dst
+        MVX src dst -&gt; LDX src / STX dst
+        MVY src dst -&gt; LDY src / STY dst
+        MWA src dst -&gt; Move 16-bit data using LDA/STA
+        MWX src dst -&gt; Move 16-bit data using LDX/STX
+        MWY src dst -&gt; Move 16-bit data using LDY/STY
+        Rcc -&gt; Bcc *
+        Scc:&lt;insn&gt; -&gt; Bcc next / &lt;insn&gt; / next:
+        Jcc -&gt; branch + jump
+        INW/DEW -&gt; INC/DEC / BNE / INC/DEC
+        INL/DEL -&gt; INC/DEC 24-bit "long" value
+        IND/DED -&gt; INC/DEC 32-bit "double-word" value
+        ADD -&gt; CLC+ADC
+        SUB -&gt; SEC+SBC
+        ADB/SBB src1 src2 dst -&gt; Store src1-src2 in dst (8-bit)
+        ADW/SBW src1 src2 dst -&gt; Store src1-src2 in dst (16-bit)
+        CPB/CPW/CPL/CPD src1 src2 -&gt; Compare src1-src2 (8/16/24/32-bit)
+        PHR -&gt; Push A, X, Y
+        PLR -&gt; Pop Y, X, A
+        
+    Supported directives:
+        ORG address            Shift code origin to new address
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>a8</span>
+Set Atari800-compatible command aliases
+</summary>
+<a id='a8'>
+<pre>
+    Sets compatibility aliases for commands from the Atari800 emulator debugger.
+    
+      a8
+    
+    The following commands are mapped:
+    
+        cont      g            Continue (go)
+        show      r            Show registers
+        stack     k            Show stack
+        setpc *   r pc *       Change PC register
+        seta *    r a *        Change A register
+        setx *    r x *        Change X register
+        sety *    r y *        Change Y register
+        sets *    r s *        Change S register
+        setn [*]  r p.n */1    Set N flag
+        setv [*]  r p.v */1    Set V flag
+        setd [*]  r p.d */1    Set D flag
+        seti [*]  r p.i */1    Set I flag
+        setz [*]  r p.z */1    Set Z flag
+        setc [*]  r p.c */1    Set C flag
+        clrn      r p.n 0      Clear N flag
+        clrv      r p.v 0      Clear V flag
+        clrd      r p.d 0      Clear D flag
+        clri      r p.i 0      Clear I flag
+        clrz      r p.z 0      Clear Z flag
+        clrc      r p.c 0      Clear C flag
+        c         e            Change (enter)
+        d         u            Disassemble (unassemble)
+        f * * *.. f * L&gt;* *..  Fill memory
+        m * [*]   db * [L&gt;*]   Memory list (display bytes)
+        s * *..   s * [L&gt;*]..  Search memory
+        sum * *   .sum * L&gt;*   Compute memory sum
+        bpc       bp           Set PC breakpoint
+        history   h            Show CPU history
+        g         t            Go one insn (trace)
+        r         gr           Execute until return
+        b         bl/bc/bp     Breakpoints
+        antic     .antic       Display ANTIC status
+        gtia      .gtia        Display GTIA status
+        pia       .pia         Display PIA status
+        pokey     .pokey       Display POKEY status
+        dlist     .dumpdlist   Show display list
+        labels    .loadsym     Load symbols
+        coldstart .restart     Cold-reset the simulation
+        warmstart .warmreset   Warm-reset the simulation
+        help      .help        Display command help
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>ac, al, as</span>
+Manage command aliases
+</summary>
+<a id='ac'>
+<pre>
+    Set, clear, or list aliases for debugger commands.
+    
+        ac                    (Clear all aliases)
+        al                    (List aliases)
+        as &lt;alias&gt; &lt;command&gt;  (Set an alias)
+        as &lt;alias&gt;            (Unset an alias)
+        
+    Allows you to set alternate name aliases for commands. If an alias is set
+    with the same name as a standard debugger command, the alias takes
+    precedence. An alias always redirects to a standard command; an alias
+    cannot point to another alias.
+    
+    To access a command that is blocked by an alias, prefix the command name
+    with a backtick (`).
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>ap</span>
+Add command alias pattern
+</summary>
+<a id='ap'>
+<pre>
+    Adds a command alias pattern for a debugger command.
+    
+        ap "pattern"          (Clear alias pattern)
+        ap "pattern" "alias"  (Set alias pattern)
+        
+    Allows a command alias to be set that matches and transforms arguments.
+    The pattern string matches a command and optional arguments, while the
+    alias string determines the resulting command and arguments.
+    
+    Tokens %0, %1, %2... up through %9 can be used to match and substitute
+    parameters. They must appear as or at the end of an argument in the
+    pattern. The special token %* can also be used to capture and recall
+    a variable number of remainder of arguments (varargs). It can only
+    capture and recall entire parameters.
+    
+    If multiple alias patterns are declared for the same command, they are
+    added and tested in order and the first one to match is used. Therefore,
+    patterns should be added from least to most general.
+    
+    Examples:
+    
+        ap "foo" "bar"
+        
+           Matches the command "foo" with no arguments and executes "bar"
+           in response.
+           
+        ap "foo x" "bar y"
+        
+           Matches the command "foo" with a single argument "x" and executes
+           the command "bar y" in response.
+           
+        ap "foo %1 %2 %*" "bar %1 L&gt;%2 %*"
+        
+           Matches the command "foo" with two or more arguments and executes
+           the command "bar" with the second argument prefixed with L&gt;.
+           
+        ap "foo %1 L%2" "bar %1 %2"
+        
+           Matches the command "foo" with exactly two arguments and the second
+           argument prefixed with L, and executes "bar" with the second
+           argument stripped of its prefix.
+           
+    See also: <a href='#ac'>ac</a>, <a href='#al'>al</a>, <a href='#as'>as</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>ba</span>
+Break on memory access
+</summary>
+<a id='ba'>
+<pre>
+    Set or clear a memory access breakpoint.
+    
+      ba [-n] [-k] [-q] [-g &lt;group&gt;] r &lt;address&gt; [L&lt;length&gt;] ["cmd"]
+                                         (Break on memory read)
+      ba [-n] [-k] [-q] [-g &lt;group&gt;] w &lt;address&gt; [L&lt;length&gt;] ["cmd"]
+                                         (Break on memory write)
+      ba r/w *         (Clear memory read/write access breakpoints)
+      
+    Memory access breakpoints cause the emulator to stop whenever the CPU
+    core reads or writes a particular address. There can be an unlimited
+    number of both read and write breakpoints. If a length greater than 1
+    byte is specified, a range breakpoint is created.
+    
+    If a quoted string is supplied, it is run as a command whenever the
+    breakpoint is hit.
+    
+    DMA accesses, such as by ANTIC or VBXE, do not trip access breakpoints.
+    All breakpoints are by CPU address and trip regardless of any
+    bankswitching or other memory overlays.
+    
+    Memory read breakpoints can be tripped by false reads from the CPU core.
+    This happens for certain indexed operations. Although generally invisible
+    to normal program operation, these false reads are real and can cause
+    malfunctions with memory mapped hardware, such as cartridge banking
+    registers that are sensitive to reads. False writes are rarer but can
+    occur with read/modify/write instructions.
+
+    The -n, -k, -q, and -g options are the same as for the bp command.
+    
+    Using * as the address will clear all access breakpoints of the
+    indicated type.
+
+    See also: <a href='#bp'>bp (set breakpoint)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bc</span>
+Clear breakpoint(s)
+</summary>
+<a id='bc'>
+<pre>
+    Clear PC, memory, or expression breakpoints.
+    
+      bc &lt;index&gt;     (Clear a breakpoint)
+      bc *           (Clear all breakpoints)
+    
+    Removes a breakpoint by index, or if * is specified, all breakpoints.
+    This works for any breakpoint listed by the bl (breakpoint list)
+    command.
+
+    By default 'bc' only clears breakpoints in the main breakpoint
+    group. Breakpoints in other groups can be cleared by prefixing with
+    with the group name in a period, e.g. foo.1. Similarly, an entire
+    group can be cleared with 'bc group.*'.
+    
+    See also: <a href='#ba'>ba</a>, <a href='#bp'>bp</a>, <a href='#bl'>bl</a>, <a href='#bx'>bx</a>
+      
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bl</span>
+List breakpoints
+</summary>
+<a id='bl'>
+<pre>
+    Lists all currently set breakpoints.
+
+      bl [-a] [-v] [-t]   (List breakpoints)
+      
+    Displays a list of all breakpoints. The displayed breakpoint indices
+    can be used in other commands such as bc (breakpoint clear).
+
+    Flags displayed on each breakpoint:
+
+      K     - auto-clear on reset
+      O     - one-shot
+      PC    - break on CPU PC address
+      R     - break on read access
+      W     - break on write access
+    
+    Deferred breakpoints are also listed and are ones that haven't been
+    bound to an actual address yet. These remain inactive until symbols
+    have been loaded that contain an entry for the source file/line
+    reference.
+
+    -a lists breakpoints in all groups. Normally only breakpoints in the
+    main group are listed.
+
+    -t lists breakpoints for all targets, instead of just the current
+	target.
+
+    -v shows verbose information about internal system and CPU core
+    breakpoints.
+    
+    See also: <a href='#bc'>bc</a>, <a href='#bl'>bl</a>, <a href='#bp'>bp</a>, <a href='#bx'>bx</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bp</span>
+Set breakpoint
+</summary>
+<a id='bp'>
+<pre>
+    Set a breakpoint at a PC address.
+    
+      bp [-n] [-k] [-q] [-h] [-g group] &lt;xaddress&gt; ["command"]
+      bp [-n] [-k] [-q] [-h] [-g group] `file:line` ["command"]
+      
+    Sets a PC breakpoint in the CPU core, which cause the emulator to stop
+    when the PC is equal to the address of a breakpoint. There are no
+    limits to the number of PC breakpoints. Breakpoints do not modify
+    memory and work even after the location has been modified; they also
+    fire at an address regardless of any bank switching.
+
+    The address expression is evaluated when the bp command is executed, not
+    when the breakpoint is tested. "pc+3", for instance, sets the breakpoint
+    at 3 bytes after the position that the program counter is at now.
+
+    The -n option creates a non-stopping breakpoint after which execution
+    continues.
+
+    Breakpoints created with -k are automatically cleared on reset.
+
+    -g creates the breakpoint in a named group. Named groups have a separate
+    numbering than the main user group and are not visible by default.
+
+    -q suppresses normal output of the command.
+
+    -h marks the breakpoint as hidden, suppressing UI updates. This is useful
+    for temporary breakpoints set automatically, such as tracepoints.
+    
+    If a command is specified, the command is executed when the breakpoint
+    fires. Multiple commands may be specified using ; as a separator.
+    The normal breakpoint hit message is suppressed, but execution will
+    stop after the commands are executed unless a command is also issued
+    to continue execution. This can be used to implement tracepoints.
+    
+    Examples:
+
+        bp -n pc "? db(rtclok+2)"
+
+            Set a breakpoint at the current location that prints the low
+            byte of the OS real-time clock, and continue execution (-n).
+
+        bp -n main "r @t1 @frame-@t0; r @t0 @frame"
+
+           Set a non-blocking breakpoint on main so that whenever main is
+           hit, temporary variable @t1 is set to the difference in the
+           frame counter since the last time (@t0) and update @t0 to the
+           current frame counter value.
+
+    Breakpoints can also be set on source lines using source notation:
+    
+      bp `library.s:207`
+      
+    The breakpoint is set immediately if symbols are available. Otherwise,
+    a deferred breakpoint is created and the breakpoint is bound to the
+    code address when the symbols are loaded.
+
+    If an extended memory address is used, a bank-sensitive breakpoint is
+    created that only triggers if the PORTB banking configuration matches.
+    For instance, setting a breakpoint on $EF'41AC will trigger when
+    PC=$41AC and PORTB=$EF.
+
+    See also: <a href='#ba'>ba</a>, <a href='#bs'>bs</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bsc</span>
+Set breakpoint condition
+</summary>
+<a id='bsc'>
+<pre>
+    Set the condition expression on a breakpoint.
+
+      bsc &lt;id&gt; &lt;condition&gt;
+
+    Sets or changes the conditional expression that determines whether a
+    breakpoint is hit. For instance, if breakpoint 0 at $4000 is firing
+    too often when called with a return address of $3980, that case can
+    be filtered out as follows:
+
+      bsc 0 "@ra != $3980"
+
+    The conditional expression on a breakpoint may differ from the one
+    supplied to the 'bx' command due to extraction of the PC or access
+    subexpression. Use the bl (list breakpoints) command to check the
+    actual condition.
+
+    See also: <a href='#bc'>bc (clear breakpoints)</a>, <a href='#bl'>bl (list breakpoints)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bt</span>
+Set PC breakpoint with trace (tracepoint)
+</summary>
+<a id='bt'>
+<pre>
+    Set a tracepoint at a PC address.
+    
+      bt [-k] [-q] [-h] [-g group] { &lt;address&gt; | `file:line` }
+             format [arguments...]
+
+      bt [-k] [-q] [-h] [-g group] { &lt;address&gt; | `file:line` }
+             format [arguments...] -- [return-arguments...]
+      
+    Sets a non-stopping breakpoint at a PC address or source location
+    with a command to print a trace line on the console when the breakpoint
+    is hit (tracepoint). The breakpoint location is the same as for the
+    bp (set breakpoint) command and the formatting arguments are the same
+    as for the .printf command.
+
+    The -k, -q, -g, and -h options work the same as for the bp command.
+    
+    This command is equivalent to using the bp -n command with a breakpoint
+    command of the form:
+    
+      `.printf &lt;format&gt; &lt;arguments...&gt;
+
+    The @ts variable can be used to substitute the output of the last
+    .sprintf command as the format string.
+
+    The second form of the command with '--' allows a return tracepoint to
+    be set. The format string is evaluated with the first set of arguments
+    prior to -- when the tracepoint is first hit. A second, one-time
+    tracepoint is then set at the return address (@ra) with the resulting
+    string as the format, expanded by the second set of arguments.
+
+    Examples:
+
+       bt siov "SIOV command=$%02X aux=$%04X" db(dcomnd) dw(daux1)
+       bt fadd "FADD(%g+%g) = %%g --&gt; $%04X" fr0 fr1 @ra -- fr0
+    
+    See also: <a href='#bp'>bp</a>, <a href='#.printf'>.printf</a>, <a href='#.sprintf'>.sprintf</a>
+    
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bta</span>
+Set access breakpoint with trace (tracepoint)
+</summary>
+<a id='bta'>
+<pre>
+    Set a tracepoint on access to a memory location or range.
+    
+      bta [-k] [-q] [-h] [-g group] &lt;mode&gt; &lt;address&gt; [L&lt;length&gt;]
+             format [arguments...]
+      
+    Sets a non-stopping breakpoint at a memory location or range with a
+    command to print a trace line on the console when the breakpoint is
+    hit (tracepoint). The breakpoint location is the same as for the ba
+    (break on memory access) command and the formatting arguments are the
+    same as for the .printf command.
+
+    The -k, -q, -g, and -h options work the same as for the bp command.
+    
+    This command is equivalent to using the ba -n command with a breakpoint
+    command of the form:
+    
+      `.printf &lt;format&gt; &lt;arguments...&gt;
+
+    The @ts variable can be used to substitute the output of the last
+    .sprintf command as the format string.
+
+    Examples:
+
+        bta r prior "PRIOR=$%02X" value
+        bta w D100 L100 "[$%04X]=$%02X" value
+    
+    See also: <a href='#bt'>bt</a>, <a href='#.printf'>.printf</a>, <a href='#.sprintf'>.sprintf</a>
+    
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bx</span>
+Break on expression (conditional breakpoint)
+</summary>
+<a id='bx'>
+<pre>
+    Set a breakpoint conditional on an expression.
+    
+      bx [-k] [-q] [-n] [-g group] &lt;expression&gt; ["command"]
+      
+    Creates a breakpoint that only activates when the expression is true.    
+    In addition to the normal expression elements, conditional breakpoints
+    may have the following additional clauses:
+    
+      read=&lt;address&gt;    Read access to address
+      write=&lt;address&gt;   Write access to address
+      read &gt;[=] &lt;lo&gt; and read &lt;[=] &lt;hi&gt;      Read access to address range
+      write &gt;[=] &lt;lo&gt; and write &lt;[=] &lt;hi&gt;    Write access to address range
+
+    The debugger recognizes and optimizes for three specific patterns:
+
+      1) A single PC address.
+      2) A single read or write address.
+      3) A read or write address range.
+
+    When these patterns are recognized, the appropriate breakpoint type is
+    created and any remainder of the expression is set as the conditional
+    (filter) expression on the breakpoint. Breakpoints not matching any
+    of the above patterns are created as per-instruction breakpoints,
+    executed before each instruction; these are powerful but slow.
+    
+    The debugger can optimize some conditional expressions for faster
+    evaluation, such as removing redundant logical negation (!) operators
+    and folding constants. An error is reported if the conditional
+    expression is determined to always evaluate to true or false.
+    
+    If the expression reduces to a single PC or access check, the result is
+    the same as the equivalent bp or ba command.
+    
+    Examples:
+    
+      bx "pc=$4000 and y=4"
+      bx "write=rtclok+2 and db(rtclok+2)=$04"
+      bx "write=rtclok+2 and pc&gt;$c000"
+      bx "write = consol and value != $08"
+      bx "read&lt;$fffa and db(pc)!=$20 and db(pc)!=$60 and read&gt;=$d800"
+      bx db(pc)=$48
+      
+    If a command is specified, it is executed when the breakpoint trips;
+    see the bp (breakpoint) command for details.
+    
+    Example:
+    
+      bx "pc=ciov and x=$10" "r; g"
+    
+    The -k, -q, and -g options work the same as for the bp command.
+
+    See also: <a href='#?'>? (evaluate expression)</a>, <a href='#bp'>bp (breakpoint)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>bs</span>
+Break on disk sector
+</summary>
+<a id='bs'>
+<pre>
+    Set a breakpoint when D1: reads a particular virtual disk sector.
+    
+      bs &lt;sector&gt;    (Set disk sector breakpoint)
+      bs *           (Clear disk sector breakpoint)
+      
+    Stops emulation when the first disk drive (D1:) receives a request
+    to read a particular virtual disk sector.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>da, db, dbi, dd, df, di, dw</span>
+Display memory
+</summary>
+<a id='da'>
+<pre>
+    Shows the contents of memory with a particular interpretation.
+    
+      da [&lt;xaddress&gt; [L&lt;length&gt;]]   (Display ATASCII string)
+      db [&lt;xaddress&gt; [L&lt;length&gt;]]   (Display bytes)
+      dbi [&lt;xaddress&gt; [L&lt;length&gt;]]  (Display bytes with INTERNAL text)
+      dd [&lt;xaddress&gt; [L&lt;length&gt;]]   (Display 32-bit double words)
+      df [&lt;xaddress&gt; [L&lt;length&gt;]]   (Display decimal float)
+      di [&lt;xaddress&gt; [L&lt;length&gt;]]   (Display INTERNAL string)
+      dw [&lt;xaddress&gt; [L&lt;length&gt;]]   (Display 16-bit words)
+      
+    Length specifies the number of elements to display.
+    
+    The display commands read memory in debug mode and do not trigger side
+    effects that would normally be caused by a CPU read, such as clearing
+    PIA interrupts or switching cartridge banks.
+    
+    If no address or length is given, memory dumping continues from the
+    end of the last continuable operation.
+
+    The db and dbi commands take additional optional switches:
+
+      -c:
+        Changes the text dump to interpret the data as it would be
+        Displayed on a 20 column text mode display, with the reduced 64
+        byte character set.
+
+      -w &lt;width&gt;:
+        Displays data with &lt;width&gt; bytes per row.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>dbx</span>
+Display bytes from expression
+</summary>
+<a id='dbx'>
+<pre>
+    Evaluates an expression with sequential indices and displays the result
+    as a memory dump.
+
+      dbx [-w &lt;width&gt;] &lt;expr&gt; [L&lt;length&gt;]
+
+    The expression is evaluated up to &lt;length&gt; times (default 128) with the
+    current 0-based index as 'address', and the result displayed as bytes.
+
+    Example:
+
+      ;Display bytes at $4000 after XOR with $AA
+      dbx "db($4000+address) ^ $aa" L$100
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>dy</span>
+Display binary
+</summary>
+<a id='dy'>
+<pre>
+    Shows the contents of memory as binary.
+    
+      dy [-c &lt;chars&gt;] [&lt;xaddress&gt; [L&lt;length&gt;]]
+      
+      -c: set '1' bit character, or both 0/1 bit chars
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>e, eb, ew</span>
+Enter (alter) data in memory
+</summary>
+<a id='e'>
+<pre>
+    Modifies a block of memory with new data.
+    
+      e &lt;xaddress&gt; &lt;expr&gt; [&lt;expr&gt;...]   (Enter bytes)
+      eb &lt;xaddress&gt; &lt;expr&gt; [&lt;expr&gt;...]  (Enter bytes)
+      ew &lt;xaddress&gt; &lt;expr&gt; [&lt;expr&gt;...]  (Enter words)
+
+    Each successive byte is set to the value of an expression. For eb,
+    expressions must evaluate to unsigned byte range (0-255); use the
+    low byte (&lt;) operator if necessary to forcibly truncate values. For ew,
+    values must be in word range ($0000-FFFF).
+
+    Writes by the enter commands have the same effect as CPU writes,
+    including triggering side effects when hardware registers are accessed.
+    
+    The 'e' command is a synonym for 'eb'.
+
+    See also: <a href='#f'>f (fill memory)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>f</span>
+Fill memory
+</summary>
+<a id='f'>
+<pre>
+    Fills a block of memory with a pattern.
+    
+      f &lt;xaddress&gt; L&lt;length&gt; &lt;value&gt;...
+      
+    Each successive byte is set to the value of an expression until &lt;length&gt;
+    bytes have been filled. Expressions must evaluate to unsigned byte range
+    (0-255); use the low byte (&lt;) operator if necessary to forcibly truncate
+    values. The pattern repeats until the specified length is filled.
+    
+    Examples:
+      f 2000 L1000 aa 55
+      f 2000 L400 8d &lt;serout &gt;serout
+      f $01:0000 L10000 0
+    
+    See also: <a href='#e'>e (enter)</a>, <a href='#fbx'>fbx (fill bytes with expression)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>fbx</span>
+Fill bytes with expression
+</summary>
+<a id='fbx'>
+<pre>
+    Fills a block of memory by evaluating an expression for each location.
+    
+      fbx &lt;xaddress&gt; L&lt;length&gt; &lt;expression&gt;
+      
+    The expression is evaluated once for each byte in the range and its low
+    byte is used to set the value of that location. The VALUE expression
+    token evaluates to the current zero-based index in the range (0-255 only)
+    and the WRITE expression token gives the current extended address.
+    
+    Examples:
+      fbx 8000 L1000 value
+      fbx 8000 L1000 &lt;write
+      fbx 8000 L1000 "(value-value%80) + (value%40)*2 + (value%80)/40"
+      
+    See also: <a href='#f'>f (fill)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>g</span>
+Go
+</summary>
+<a id='g'>
+<pre>
+    Resume execution.
+    
+      g [-n] [-s]
+      
+    By default, the g (Go) command disables source mode debugging. The -n
+    switch preserves the current mode and the -s switch forces source mode.
+    
+    See also: <a href='#.sourcemode'>.sourcemode</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>gcr</span>
+Go cycle relative
+</summary>
+<a id='gcr'>
+<pre>
+    Resume execution for the given number of machine cycles.
+
+      gcr &lt;count&gt;
+
+    The number of cycles can include cycles where the CPU is halted.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>gf</span>
+Go until frame end
+</summary>
+<a id='gf'>
+<pre>
+    Resume execution until the end of the current frame.
+    
+      gf
+      
+    Resumes execution until the beginning of scan line 0 of the next frame.
+    If the beam position is currently at the beginning of scan line 0, an
+    entire frame is executed.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>gr</span>
+Go until return (step out)
+</summary>
+<a id='gr'>
+<pre>
+    Resume execution until the current function is exited.
+    
+      gr
+      
+    Resumes execution until the stack pointer rises above the level of
+    the current function. Any child functions executed due to a JSR
+    instruction or an interrupt are run in their entirety.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>gs</span>
+Go until scanline
+</summary>
+<a id='gs'>
+<pre>
+    Resume execution until the beginning of a particular scanline.
+    
+      gs &lt;scanline&gt;
+      
+    If the current scanline is specified, an entire frame is executed.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>gt</span>
+Go with tracing enabled
+</summary>
+<a id='gt'>
+<pre>
+    Resume execution with per-instruction tracing enabled.
+    
+      gt
+      
+    During traced execution, the current beam location, PC, registers, and
+    instruction are logged.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>gv</span>
+Go until vertical blank interrupt (VBI)
+</summary>
+<a id='gv'>
+<pre>
+    Resume execution until the beginning of the vertical blank interrupt
+    (VBI) is hit.
+
+      gv
+
+    If the VBI is disabled, execution stops at the beginning of scan line
+    248.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>h</span>
+Show CPU history
+</summary>
+<a id='h'>
+<pre>
+    Display history of CPU instructions executed.
+
+      h [-i] [-c] [-s &lt;startidx&gt;] [&lt;count&gt; [&lt;pattern&gt;]]
+      
+      -i: Show only interrupt routine execution
+      -c: Compress loops
+      -s: Start from position
+      &lt;count&gt;: Number of entries to display
+      &lt;pattern&gt;: Glob wildcard (?*) to search for
+    
+    The "record instruction history" setting must be enabled in CPU options
+    for the history command to work.
+    
+    The history UI pane contains a more powerful history preprocessor that is
+    also able to identify subroutines and is recommended for serious history
+    review.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hma</span>
+Show heat map accesses
+</summary>
+<a id='hma'>
+<pre>
+    Shows read and write accesses to memory.
+    
+      hma [&lt;address&gt; [L&lt;length&gt;]]
+      
+    The requested memory range is broken down into contiguous ranges that
+    have been read and written by the CPU.
+    
+    Note that accelerated accesses from high-level emulation (HLE) and from
+    ANTIC are not shown in the heat map.
+    
+    See also: <a href='#hmc'>hmc (clear heat map)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hmc</span>
+Clear heat map
+</summary>
+<a id='hmc'>
+<pre>
+    Clears all tracking data in the heat map.
+    
+      hmc
+      
+    All registers and memory locations are marked as preset.
+    
+    See also: <a href='#hme'>hme (heat map enable)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hmd</span>
+Dump heat map memory status
+</summary>
+<a id='hmd'>
+<pre>
+    Dumps the tracking status of memory locations in the heat map.
+    
+      hmd &lt;address&gt; [L&lt;length&gt;]
+      
+    The status of a memory location may be one of the following:
+    
+      Unknown:       Source of data was not tracked.
+      Preset:        Source was not modified since the last clear.
+      Immediate:     Source is the argument of an immediate-mode insn.
+      Computed:      Source is from computation on the CPU.
+      
+    Data sources are tracked through load/store instructions and through
+    the registers such that the original load source is propagated instead
+    of showing the copy routine itself as the data source.
+
+    See also: <a href='#hmc'>hmc (clear heat map)</a>, <a href='#hme'>hme (heat map enable)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hme</span>
+Enable or disable heat map
+</summary>
+<a id='hme'>
+<pre>
+    Enables or disables heat map tracing.
+    
+      hme on                (Enable heat map)
+      hme off               (Disable heat map)
+      
+    The heat map tracks the source of data as it flows through registers and
+    memory, as well as any read or write accesses to memory.
+    
+    See also: <a href='#hma'>hma (show heat map accesses)</a>, <a href='#hmc'>hmc (heat map clear)</a>
+              <a href='#hmd'>hmd (dump heat map memory status)</a>
+              <a href='#hmr'>hmr (heat map register status).</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hmp</span>
+Preset heat map range
+</summary>
+<a id='hmp'>
+<pre>
+    Marks a range of memory in the heat map as valid with a preset value.
+
+      hmp &lt;xaddr&gt; L&lt;length&gt;
+
+    See also: <a href='#hmu'>hmu (unset heat map range)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hmr</span>
+Show heat map register status
+</summary>
+<a id='hmr'>
+<pre>
+    Dump CPU register status being tracked by heat map.
+    
+      hmr
+      
+    The sources of the data in the A, X, and Y registers is shown if known.
+    Additionally, validity information is shown for the A, X, Y, and P
+    registers, indicating which data bits in each register are sourced
+    from valid data and which are based on uninitialized data.
+    
+    See also: <a href='#hmc'>hmc (heat map clear)</a>, <a href='#hme'>hme (heat map enable)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hmt</span>
+View/modify heat map trap options
+</summary>
+<a id='hmt'>
+<pre>
+    Views or modifies which access types detected by the heat map can cause
+    debugger traps.
+
+      hmt                      (View trap options)
+      hmt &lt;type&gt; off|early|on  (Set mode for single trap type)
+      hmt * off|early|on       (Set mode for all trap types)
+
+    The heat map engine can detect when uninitialized data is used by
+    6502 code and force a trap into the debugger when this occurs. The
+    hmt command is used to configure the various trap types:
+
+      load:
+        Activates when uninitialized data is first loaded into the
+        CPU from memory. This traps at the earliest sign of uninitialized
+        memory use, but it can give false positives for some valid cases
+        where uninited memory is merely being copied.
+
+      compute:
+        Activates when uninitialized data is used in computations. This
+        avoids trapping on uninitialized memory copies, but traps when
+        an ALU instruction is used on the data.
+
+      branch:
+        Activates when a branch occurs on a flag state that is undefined
+        due to being based on uninitialized data.
+
+      ea (effective address):
+        Activates when an indexed addressing mode uses an index register
+        with a value based on uninitialized data.
+
+      hwstore:
+        Activates when a store to a hardware register occurs with a
+        value based on uninitialized data.
+
+    Traps can be enabled early or at default time. The default enabled
+    state (on) tracks memory state from reset but only activates traps
+    once the OS has initialized or playfield DMA is enabled, whichever
+    comes first. This avoids false positives on problematic OS code,
+    notably the RAM size test. Alternatively, traps can be enabled early,
+    which enables traps immediately after reset. More complex conditions
+    can be enabled by issuing the hmt command off of breakpoints.
+
+    The heat map engine tracks uninitialized state in registers, flags,
+    and memory on a bit basis. For instance, LSR on an uninitialized
+    location will result in the C flag and bits 0-6 tagged as uninited,
+    but bit 7 and the N flag will be marked valid. Validity state can
+    also be tracked from one memory location to another through registers
+    during a memory copy. However, the engine does not track the memory
+    map state and can be confused by additional hardware, high level
+    emulation, or cartridge ROMs. 
+
+    The heat map must be enabled for heat map traps to work. Since the
+    heat map traps the source of values, it should be enabled from boot
+    in order to trace all data flows correctly. The hmp and hmu commands
+    can be used to force the validity state of memory to correct mistakes.
+
+    See also: <a href='#hme'>hme (heat map enable)</a>, <a href='#hmp'>hmp (preset heat map range)</a>
+              <a href='#hmu'>hmu (unset heat map range)</a>, <a href='#hmr'>hmr (show heat map register state)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>hmu</span>
+Unset heat map range
+</summary>
+<a id='hmu'>
+<pre>
+    Marks a range of memory in the heat map as invalid.
+
+      hmu &lt;xaddr&gt; L&lt;length&gt;
+
+    See also: <a href='#hmp'>hmp (preset heat map range)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>ib</span>
+Input byte
+</summary>
+<a id='ib'>
+<pre>
+    Read from a memory address in CPU address space with side effects.
+
+      ib &lt;address&gt;
+
+    Reads from a memory address using normal CPU core read rules, activating
+    any side effects normally associated with reads from that location.
+    Normally, reads in the debugger have side effects disabled so that they
+    do not change simulation state; the 'ib' command allows those side
+    effects to occur as usual. This includes clearing PIA interrupts when
+    PORTA/B is read and switching cartridge banks on reads from the CCTL
+    region with certain cartridge types.
+
+    See also: <a href='#db'>db (display bytes)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>k</span>
+Show call stack
+</summary>
+<a id='k'>
+<pre>
+    Display a list of return addresses on the stack.
+    
+      k
+      
+    The call stack is computed by virtualized execution, so it may be
+    incorrect if bankswitching or other complex techniques are involved.
+    Note that because return addresses are displayed, the call stack
+    will not show parent call sites to children that never return in
+    normal execution.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>lfd, lfe, lfl, lft</span>
+Logging filter control
+</summary>
+<a id='lfd'>
+<pre>
+    Display or modify logging filter settings.
+    
+      lfd &lt;channel&gt;|*   Disable logging channel
+      lfe &lt;channel&gt;|*   Enable logging channel without timestamps
+      lfl               List logging channels
+      
+    The logging filter controls which events from the simulation are shown
+    in the debug output window during execution.
+
+
+      lft [-t] [-c] [-u] [-r] &lt;channel&gt;|*
+      
+    Enables a logging channel with prefixes indicating running status:
+    
+      -t   Include beam position timestamp.
+      -c   Include cassette tape position.
+      -u   Include timestamp in microseconds (us).
+      -r   Include raw 32-bit timestamp in cycles.
+      
+    If no switches are supplied, -t is assumed.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>lm</span>
+List modules
+</summary>
+<a id='lm'>
+<pre>
+    Display a list of currently known modules and any loaded symbols.
+    
+      lm
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>ln</span>
+List nearest symbol
+</summary>
+<a id='ln'>
+<pre>
+    Display the closest symbol to a given address.
+    
+      ln &lt;address&gt;
+      
+    The closest symbol is the one with the highest address that is equal to
+    or lower than the given address.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>m</span>
+Move memory
+</summary>
+<a id='m'>
+<pre>
+    Move a block of memory to another location.
+    
+      m &lt;address&gt; L&lt;length&gt; &lt;dest-address&gt;
+      
+    Memory in the source block is copied to a new block starting at the
+    destination address. If the source and destination blocks overlap, a
+    descending copy is used if needed to copy correctly. This is not
+    guaranteed if aliased memory windows are used, such as copying from
+    $4000 to x:$100 with the CPU extended memory window active.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>o</span>
+Step over
+</summary>
+<a id='o'>
+<pre>
+    Execute one instruction, stepping over any subroutine calls.
+    
+      o
+      
+    This is the same as (t)race, except that if a JSR or an interrupt is
+    encountered, execution continues until the subroutine exits.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>r</span>
+Registers
+</summary>
+<a id='r'>
+<pre>
+    Display or modify register values.
+    
+      r                (Display registers)
+      r &lt;reg&gt; &lt;value&gt;  (Modify register)
+      
+    For 6502-derived CPUs, the registers that can be modified are: PC, A, X,
+    Y, S, and P. The flags in the P register can also be individually toggled:
+    
+      p.n    Negative (sign) flag
+      p.v    Overflow flag
+      p.d    Decimal mode flag
+      p.i    Interrupt mask flag
+      p.z    Zero flag
+      p.c    Carry flag
+      
+    The break flag cannot be modified as it does not exist in the P register,
+    only in the image of P pushed on the stack during interrupt entry.
+    
+    In 65C816 mode, the following additional registers are available:
+    
+      c      16-bit accumulator (B:A)
+      d      Direct page register
+      b/dbr  Data bank register
+      k/pbr  Program bank register
+      p.m    Accumulator size flag
+      p.x    Index size flag
+      e      Emulation flag
+
+    For Z80 coprocessors, the available registers are: A, F, B, C, D, E, H, L,
+    I, R, AF, BC, DE, HL, IX, IY, SP, A', B', C', D', E', H', L', AF', BC', DE',
+    and HL'.
+
+    For 8048 coprocessors, the available registers are: A, PSW, R0-R7.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>s, sa, si, sw</span>
+Search memory
+</summary>
+<a id='s'>
+<pre>
+    Searches memory for a specific pattern.
+    
+      s &lt;xaddress&gt; L&lt;length&gt; &lt;value&gt;...   (search bytes)
+      sa &lt;xaddress&gt; L&lt;length&gt; "string"    (search ATASCII)
+      si &lt;xaddress&gt; L&lt;length&gt; "string"    (search INTERNAL)
+      sw &lt;xaddress&gt; L&lt;length&gt; &lt;value&gt;...  (search words)
+      
+    All starting addresses of blocks of memory that contain the given byte,
+    word, or string pattern.
+
+    For s (search bytes), expressions must evaluate to unsigned byte range
+    (0-255); use the low byte (&lt;) operator if necessary to forcibly truncate
+    values.
+    
+    Examples:
+    
+      s 0 L10000 00 04 A5
+      s E800 L2800 &lt;vimirq &gt;vimirq
+      sw E800 L2800 vimirq
+      sa 0 L10000 "BOOT"
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>st</span>
+Static trace
+</summary>
+<a id='st'>
+<pre>
+    Statically traces program execution and marks labels.
+    
+      st [-m] &lt;baseaddr&gt; [&lt;restrictbase&gt; L&lt;restrictlength&gt;]
+      
+    The st command examines program code and finds all static program traces
+    by following absolute JMP/JSR and relative branch instructions. The custom
+    symbol table is then populated with labels for each jump or branch target.
+
+    If -m is specified, a label is also added for the initial base address.
+
+    Static tracing is only capable of following traces by references that are
+    statically embedded within the code. Dynamic references through jump tables
+    or vectors cannot be seen by the static tracer.
+    
+    If restrictbase and restrictlength are specified, only traces within the
+    given restricted range are followed. This is useful for contraining tracing
+    to within a specific module and avoiding bogus tracing into other regions,
+    such as RAM where dynamic code is kept.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>t</span>
+Trace (step one instruction) (F11)
+</summary>
+<a id='t'>
+<pre>
+    Execute one instruction, stepping into a subroutine or interrupt.
+    
+      t
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>u</span>
+Unassemble
+</summary>
+<a id='u'>
+<pre>
+    Disassemble CPU code at a given address.
+    
+      u [-e|[-m8|-m16][-x8|-x16]] [-p] [-n] [&lt;address&gt; [L&lt;length&gt;]]
+      
+    If no address is given, disassembly continues from the end of the last
+    continuable command.
+
+    In 65C816 mode, instruction encoding depends upon the current CPU mode.
+    The disassembler attempts to track the current M/X/E flags, but can easily
+    be misled. The following switches can be supplied to guide the decoder:
+
+        -m8     Assume E=0/M=0 (native mode, 8-bit memory/accumulator)
+        -m16    Assume E=0/M=1 (native mode, 16-bit memory/accumulator)
+        -x8     Assume E=0/X=0 (native mode, 8-bit index registers)
+        -x16    Assume E=0/X=1 (native mode, 16-bit index registers)
+        -e      Assume E=1 (emulation mode)
+
+    By default, the disassembler detects common REP/SEP patterns to predict
+    the M/X mode. This automatic prediction can be disabled with -p.
+
+    -n disables label decoding for the PC address and operands.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>vta, vtc, vtl, vtr</span>
+Verifier target control
+</summary>
+<a id='vta'>
+<pre>
+    Add, clear, or list verifier allowed OS entry targets.
+    
+      vta &lt;address&gt;    (Add allowed target)
+      vtc &lt;address&gt;    (Clear allowed target)
+      vtc *            (Clear all allowed targets)
+      vtl              (List allowed targets)
+      vtr              (Reset allowed targets)
+      
+    Manages the list of allowed kernel entry targets allowed by the verifier.
+    The verifier checks for improper dependencies on internal OS routines
+    by forcing a debug break if it sees a control transfer into the OS ROM
+    with an entry point not on the allowed target list. This detection may
+    misfire with an OS ROM that contains extra entry points or with a routine
+    that self-modifies its code with a vector address. The vt* commands allow
+    the target list to be modified to exclude valid targets from detection.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>wb, wc, wl, ww</span>
+Watch data
+</summary>
+<a id='wb'>
+<pre>
+    Continuously display the value of a memory location or expression.
+    
+      wb &lt;address&gt;     (Watch byte)
+      ww &lt;address&gt;     (Watch word)
+      wl               (List watches)
+      wc &lt;index&gt;|*     (Clear watches)
+      
+    The wb and ww commands display the contents of a byte or word at the
+    given address. Watched values are sampled and displayed each frame.
+    Up to eight watches can be active at any one time.
+    
+    See also: <a href='#?'>? (evaluate expression)</a>, <a href='#wx'>wx (watch expression)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>wx</span>
+Watch expression
+</summary>
+<a id='wx'>
+<pre>
+    Continuously display the value of an expression.
+
+      wx [-x8|x16|x32] &lt;expr&gt;
+
+    The wx command displays the value of an expression, which is re-evaluated
+    every frame. The expression can include memory reads (db/dw/etc.), which
+    is useful for reading variables too complex for wb or ww.
+
+    By default, the computed value is displayed in decimal. The -x8, -x16,
+    and -x32 options instead format the computed value as an 8-bit, 16-bit,
+    or 32-bit hex value.
+
+    See also: <a href='#wb'>wb (watch byte)</a>, <a href='#ww'>ww (watch word)</a>, <a href='#wl'>wl (list watches)</a>
+              <a href='#wc'>wc (clear watches)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>x</span>
+Examine symbols
+</summary>
+<a id='x'>
+<pre>
+    List symbols whose names match a given pattern.
+    
+      x &lt;pattern&gt;      (Examine symbols with name pattern)
+      x &lt;pat&gt;!&lt;pat&gt;    (Examine symbols with module and name patterns)
+      
+    The x command lists symbols according to a wildcard pattern, with ? and
+    * characters representing one and zero+ unknown characters. If a simple
+    pattern is supplied, all symbols matching that pattern are reported; if
+    a module pattern is supplied, only symbols matching both the module and
+    name patterns are reported.
+    
+    Examples:
+    
+      x *              Lists all symbols
+      x hardware!*     Lists all hardware symbols
+      x kernel*!a*     Lists all symbols starting with "a" in kernel modules
+      
+    See also: <a href='#.loadsym'>.loadsym</a>, <a href='#.unloadsym'>.unloadsym</a>, <a href='#lm'>lm (list modules)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>ya, yc, yd, yr, yw</span>
+Manage manual symbol table
+</summary>
+<a id='ya'>
+<pre>
+    Add or remove symbols from the manual symbol table.
+    
+      ya &lt;name&gt; &lt;address&gt; [L&lt;length&gt;]  (Add manual symbol)
+      yc                               (Clear manual symbols)
+      yd &lt;address&gt;                     (Delete manual symbol)
+      yr &lt;filename&gt;                    (Read manual symbol table)
+      yw &lt;filename&gt;                    (Write manual symbol table)
+      
+    The manual symbol table allows on-the-fly naming of addresses in memory.
+    Any symbols added to the manual symbol table can be used for address
+    specification and decoding as any other symbol.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.afx_dumpfilt</span>
+Dump artifacting engine filters
+</summary>
+<a id='.afx_dumpfilt'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.antic</span>
+Display ANTIC status
+</summary>
+<a id='.antic'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.bank</span>
+Show memory bank state
+</summary>
+<a id='.bank'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.base</span>
+Set numeric parsing base
+</summary>
+<a id='.base'>
+<pre>
+    Selects decimal or hexadecimal as the default parsing base for numbers.
+
+      .base dec / 10       (Set base 10 for numbers)
+      .base hex / 16       (Set base 16 for numbers)
+      .base mixed          (Set base 10 with 16 shortcut for numbers)
+      
+    The .base command changes whether numbers in expressions are by default
+    parsed as decimal (base 10) or hexadecimal (base 16). The default is
+    mixed, which selects hex for simple numbers/addresses and decimal for
+    complex expressions. This permits unprefixed hex for simple addresses
+    while avoiding unexpected hex values in expressions.
+    
+    Examples of how various expressions are interpreted:
+    
+       Expression       Hex        Dec        Mixed
+       ---------------------------------------------------------------
+       10               $10        $0A        $0A
+       $10              $10        $10        $10
+       A5               $A5        error      $A5
+       (10)             $10        $0A        $0A
+       (A5)             $A5        error      error
+       01:2000          $012000    $0107D0    $012000
+       $01:2000         $012000    $012000    $012000
+       
+    See also: <a href='#?'>? (evaluate expression)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.basic</span>
+Dump BASIC table pointers
+</summary>
+<a id='.basic'>
+<pre>
+    Displays the addresses and sizes of BASIC tables.
+    
+      .basic
+      
+    See also: <a href='#.basic_dumpline'>.basic_dumpline</a>, <a href='#.basic_vars'>.basic_vars</a>, <a href='#.basic_dumpstack'>.basic_dumpstack</a>
+              <a href='#.basic_rebuildvnt'>.basic_rebuildvnt</a>, <a href='#.basic_rebuildvvt'>.basic_rebuildvvt</a>, <a href='#.basic_save'>.basic_save</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.basic_dumpline</span>
+Dump BASIC program line
+</summary>
+<a id='.basic_dumpline'>
+<pre>
+    Lists the statements contained within a BASIC line.
+    
+      .basic_dumpline [&lt;address&gt; | * | 0] [-o &lt;offset&gt;] [-c] [-t] [-k]
+      
+    The optional address specifies the beginning of the line, including
+    the line number. If no address is specified, the continuation address
+    from the last command is used.
+
+    Using * for the address uses the current line address (STMCUR). Zero
+    specifies the beginning of the program (STMTAB).
+    
+    -o specifies an optional byte offset from the beginning of the line.
+    Any token that begins that that byte offset is marked in the output
+    with &gt;&gt;.
+
+    -c gives continuous output until the end of the program.
+    
+    Tokens from Atari BASIC, BASIC XL, and BASIC XE are supported by default.
+    -t specifies decoding of TurboBasic XL tokens instead of Basic XL/XE
+    tokens.
+
+    -k displays a hex dump beside each token.
+    
+    See also: <a href='#.basic'>.basic</a>, <a href='#.basic_vars'>.basic_vars</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.basic_dumpstack</span>
+Dump BASIC runtime stack
+</summary>
+<a id='.basic_dumpstack'>
+<pre>
+    Lists pending GOSUB and FOR..NEXT loops on the BASIC stack.
+    
+      .basic_dumpstack [-a] [-t]
+
+    -a decodes line references as addresses instead of line numbers.
+    Altirra BASIC and Turbo-Basic XL use addresses on the runtime stack
+    during execution.
+
+    -t decodes stack frames using Turbo-Basic XL format. This adds support
+    for REPEAT, WHILE, DO, and EXEC frames, as well as expanded FOR frames
+    with 256 variable support.
+      
+    See also: <a href='#.basic'>.basic</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.basic_rebuildvnt</span>
+Rebuild BASIC variable name table
+</summary>
+<a id='.basic_rebuildvnt'>
+<pre>
+    Reinitializes the BASIC variable name table (VNT) based on the variable
+    value table (VVT).
+
+      .basic_rebuildvnt [-t]
+
+    Deletes all existing variable names and replaces them with new variable
+    names, based on the variable type information in the VVT. This can repair
+    a program with a damaged VNT, at the cost of losing any existing variable
+    names. The statement table, array table, and runtime stack are relocated
+    in the process.
+
+    The type byte in the VVT must be valid for this command to work. You
+    can't rebuild both the VVT and the VNT if both are trashed.
+
+    Using this command on a running BASIC program is likely to produce
+    fireworks and is not recommended.
+
+    -t enables support for TurboBasic XL labels.
+
+    See also: <a href='#.basic_rebuildvvt'>.basic_rebuildvvt</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.basic_rebuildvvt</span>
+Rebuild BASIC variable value table
+</summary>
+<a id='.basic_rebuildvvt'>
+<pre>
+    Reinitializes the BASIC variable value table (VVT) based on the variable
+    name table (VNT).
+
+      .basic_rebuildvvt
+
+    Most of the data in the VVT is ignored after LOAD, but the variable type
+    and index need to be correct. If they are not, BASIC can act erratically.
+    The .basic_rebuildvvt command resets the mode and index bytes on each
+    variable entry based on the order of the names in the VNT and the type
+    characters on each entry, i.e. whether they end in $ or (. The VVT can
+    be rebuilt from scratch even if it is completely corrupted as long as
+    the VNT is intact.
+
+    The names in the VNT must be valid for this command to work. You can't
+    rebuild both the VVT and the VNT if both are trashed.
+
+    See also: <a href='#.basic_rebuildvnt'>.basic_rebuildvnt</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.basic_save</span>
+Save BASIC program
+</summary>
+<a id='.basic_save'>
+<pre>
+      .basic_save &lt;path&gt;
+
+    Saves a BASIC program to a file on the host (not on the emulated disk).
+    The file produced is the same format produced by Atari BASIC.
+
+    A check is made during the save process for an abnormally large
+    argument stack region, which is caused by Atari BASIC rev. B when saving.
+    If detected, the argument stack region is corrected back to its normal
+    size of 256 bytes.
+
+    This command cannot be used with Basic XE when Extend mode is enabled.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.basic_vars</span>
+Dump BASIC variables
+</summary>
+<a id='.basic_vars'>
+<pre>
+    Dumps the contents of the Atari BASIC variable name table (VNT).
+    
+      .basic_vars
+      
+    The token and name of each variable is displayed.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.batch</span>
+Run debugger batch script
+</summary>
+<a id='.batch'>
+<pre>
+    Runs the contents of a text file as a series of debugger commands.
+    
+      .batch &lt;filename&gt;
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.beam</span>
+Show ANTIC scan position
+</summary>
+<a id='.beam'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ciodevs</span>
+Dump Central Input/Output (CIO) device list
+</summary>
+<a id='.ciodevs'>
+<pre>
+    Dumps the list of CIO devices in the HATABS database.
+    
+      .ciodevs
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.covox</span>
+Dump Covox sound extension status
+</summary>
+<a id='.covox'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.crc</span>
+Compute CRC of memory range
+</summary>
+<a id='.crc'>
+<pre>
+    Computes Cyclic Redundancy Check (CRC) values for data in a memory
+    range.
+    
+      .crc [-i initial_value] address L&lt;length&gt;
+
+    The CRC-16-CCITT and CRC-32 values are computed and reported.
+    These particular CRC algorithms are used by Atari physical disk
+    formats and for identifying ROM images, respectively. Both CRCs
+    are computed conventionally, as a modulus of the message appended
+    with zero bytes at the end where the CRC would be located. The
+    CRC-32 is additionally inverted at the end.
+
+    If -i is specified, its argument is used as the initial value for
+    the CRC computation instead of -1.
+
+    See also: <a href='#.sum'>.sum</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ctc</span>
+Dump Z8430 CTC status
+</summary>
+<a id='.ctc'>
+<pre>
+      .ctc
+
+    Displays the status of any Z8430 Counter/Timer Circuit (CTC) chips
+    in the system.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.diskdumpsec</span>
+Dump floppy disk sector data
+</summary>
+<a id='.diskdumpsec'>
+<pre>
+    Displays raw sector data.
+    
+      .diskdumpsec [-d &lt;drive&gt;] [-i] &lt;virt-sector&gt;
+      
+    Reads a raw sector from disk by virtual sector number and displays
+    its contents. If phantom sectors are present, the first one is used.
+    Dumping a sector does not disturb the drive's timing state.
+
+    If -i is specified, the data is inverted before being displayed. This is
+    useful for disk formats that are non-inverted on disk and thus inverted
+    from the view of the computer (Atari 815, Indus GT CP/M).
+    
+    WARNING: While this command doesn't disturb timing state, it will
+             change virtual disk image state when reading sectors off
+             a drive with a mounted folder.
+    
+    See also: <a href='#.diskorder'>.diskorder (set forced phantom sector ordering)</a>
+              <a href='#.disktrack'>.disktrack (show sector order within track)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.diskorder</span>
+Set forced phantom sector ordering
+</summary>
+<a id='.diskorder'>
+<pre>
+    Overrides default phantom sector ordering with a predefined order.
+    
+      .diskorder &lt;sector&gt;               (Restore default sector ordering)
+      .diskorder &lt;sector&gt; &lt;indices...&gt;  (Override sector ordering)
+      
+    By default, phantom sectors within a disk track are returned either
+    by their storage order in the disk image (.pro format) or according
+    to sector timing (.atx format). The .diskorder command allows the
+    ordering to be overridden in order to diagnose or correct load
+    failures due to incorrect sector order.
+    
+    Phantom sector indices start with 1 and correspond to the Nth physical
+    sector within the disk image. This command causes virtual sector 43
+    to load its four phantom sectors in stored order:
+    
+      .diskorder 43 1 2 3 4
+      
+    This command reverses the load order:
+    
+      .diskorder 43 4 3 2 1
+      
+    The DISK logging channel is useful for examining the sector load order
+    initiated by a program.
+    
+    See also: <a href='#lfe'>lfe (enable log channel)</a>, <a href='#lft'>lft (enable tagged log channel)</a>
+              <a href='#.disktrack'>.disktrack (show sector order within track)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.diskreadsec</span>
+Read sector from floppy disk
+</summary>
+<a id='.diskreadsec'>
+<pre>
+    Reads a sector from floppy disk into memory.
+    
+      .diskreadsec [-d &lt;drive&gt;] &lt;virt-sector&gt; &lt;address&gt;
+      
+    Reads a raw sector from disk by virtual sector number and writes it
+    into memory. If phantom sectors are present, the first one is used.
+    Dumping a sector does not disturb the drive's timing state.
+
+    For sectors that have different virtual and physical sector sizes,
+    such as boot sectors, the virtual sector size is used. That is, on
+    a double density disk, the read size is 128 bytes for sectors 1-3
+    and 256 bytes for all other sectors.
+    
+    WARNING: While this command doesn't disturb timing state, it will
+             change virtual disk image state when reading sectors off
+             a drive with a mounted folder.
+    
+    See also: <a href='#.diskwritesec'>.diskwritesec (write sector to floppy disk)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.disktrack</span>
+Show sector order within track
+</summary>
+<a id='.disktrack'>
+<pre>
+    Displays all sectors within a track on D1: in rotational order.
+    
+      .disktrack [-d &lt;drive&gt;] &lt;track&gt;
+      
+    The sectors are shown with their virtual sector number and phantom
+    index, followed by the position of the sector in fractions of a
+    rotation. For a standard drive at 288 RPM, there are about 4.8
+    rotations per second.
+    
+    See also: <a href='#.diskorder'>.diskorder (set phantom sector ordering)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.diskwritesec</span>
+Write sector to floppy disk
+</summary>
+<a id='.diskwritesec'>
+<pre>
+    Writes a sector from memory to a floppy disk.
+    
+      .diskwritesec [-d &lt;drive&gt;] &lt;virt-sector&gt; &lt;address&gt;
+      
+    Writes memory to a raw sector from disk by virtual sector number.
+    If phantom sectors are present, the first one is used.
+    
+    See also: <a href='#.diskwritesec'>.diskwritesec (write sector to floppy disk)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.dlhistory</span>
+Show ANTIC display list execution history
+</summary>
+<a id='.dlhistory'>
+<pre>
+    Displays history of display list instructions executed by ANTIC.
+    
+      .dlhistory
+      
+    Unlike .dumpdlist, .dlhistory shows past display list history even if
+    the display list has been modified in memory. It also shows some
+    recorded information not found in the display list itself, such as the
+    HSCROL, VSCROL, and DMACTL states when the display list instructions
+    were executed.
+
+    In the event that a multi-line jump instruction occurs, the jumps on
+    each scanline are displayed:
+
+      120: BC30 BDF8 0 4   22   A2
+      124: BC31 BE20 0 4   22   81
+      125: BC34 ---- - -   22   81
+      126: 0202 ---- - -   22   81
+      127: C0CD ---- - -   22   81
+      128: 4068 ---- - -   22   81
+      129: 0000 BE20 0 4   22   00
+
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ds1305</span>
+Show DS1305 real-time clock status
+</summary>
+<a id='.ds1305'>
+<pre>
+    Displays status of the DS1305 real-time clock chip in the SIDE
+    or Ultimate1MB hardware.
+    
+      .ds1305
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.dma</span>
+Show current ANTIC DMA pattern
+</summary>
+<a id='.dma'>
+<pre>
+    Displays the pattern of DMA cycles performed by ANTIC for the current
+    scan line.
+    
+      .dma
+      
+    The DMA pattern can change in the middle of the scan line depending
+    on when certain critical cycles are passed and if any pertinent
+    registers are rewritten. For instance, a mid-line write to DMACTL
+    that changes the playfield width can change the DMA pattern.
+    
+    See also: <a href='#.dmamap'>.dmamap (show ANTIC DMA activity map)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.dmabuf</span>
+Show ANTIC DMA line buffer
+</summary>
+<a id='.dmabuf'>
+<pre>
+    Displays the contents of the internal line buffer within ANTIC.
+    
+      .dmabuf
+      
+    See also: <a href='#.dma'>.dma (show current ANTIC DMA pattern)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.dmamap</span>
+Show ANTIC DMA activity map
+</summary>
+<a id='.dmamap'>
+<pre>
+    Displays the pattern of DMA cycles performed by ANTIC for the current
+    frame.
+    
+      .dmamap
+      
+    ANTIC DMA analysis must be enabled in the View menu for this command to
+    work, as otherwise DMA cycle patterns are not captured.
+    
+    Each line is of the form:
+    
+        8: .*......................~ ~..................... |  10:104
+        
+    The numbers at the end are DMA and non-DMA cycle counts, respectively.
+
+    Unlike the .dma command, the .dmamap command always shows the exact DMA
+    cycle pattern that occurred, complete with any mid-scanline changes.
+    However, it cannot show upcoming DMA cycles like the .dma command can.
+      
+    See also: <a href='#.dma'>.dma (show current ANTIC DMA pattern)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.dumpdlist</span>
+Dump ANTIC display list
+</summary>
+<a id='.dumpdlist'>
+<pre>
+    Disassemble an ANTIC display list stored in memory.
+    
+      .dumpdlist [-n] [&lt;address&gt;]
+      
+    Options:
+    
+      -n    Do not collapse groups of identical mode lines.
+      
+    If no address is supplied, the current ANTIC display list pointer is
+    used.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.dumpdsm</span>
+Dump disassembly to file
+</summary>
+<a id='.dumpdsm'>
+<pre>
+    Disassemble a range of memory as CPU instructions to a file.
+    
+      .dumpdsm [-c] [-l] [-p] [-n] [-s] [-t] &lt;filename&gt; &lt;addr&gt; L&lt;length&gt;
+      
+    The following options can be specified:
+    
+      -c    Include code bytes.
+      -l    Use lowercase opcode names.
+      -n    Do not decode labels.
+      -p    Include PC address.
+      -s    Separate routines with blank lines after jumps and returns.
+      -t    Use 4 character tabs.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.dumpsnap</span>
+Create bootable snapshot image
+</summary>
+<a id='.dumpsnap'>
+<pre>
+    Create a bootable snapshot image from the current simulator state.
+    
+      .dumpsnap [-u] &lt;path.atr&gt;
+      
+    Options:
+    
+      -u    Disable compression and use uncompressed blocks
+      
+    Records hardware and memory state to a disk image with a loader that
+    restores the state on boot. The snapshot image contains the base 64K
+    of memory and requires a 128K system to boot (the extra memory is
+    used by the loader). The loader attempts to reconfigure the hardware
+    to match the snapshot state and then resume the running program.
+    
+    Not all state is restored precisely and load success depends on the
+    exact state and program code. For best results, the same OS ROM
+    should be used, no cartridge should be present, and the snapshot
+    should be taken at the beginning of the NMI handler for the vertical
+    blank interrupt.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.echo</span>
+Display message to console
+</summary>
+<a id='.echo'>
+<pre>
+    Writes a string to the console window.
+    
+      .echo &lt;strings...&gt;
+      
+    Quoted strings are displayed without quotes. To display a string with
+    a quotation mark in it ("), use escaped string syntax. Escaped strings
+    are quoted strings that are prefixed with \ and have \n, \", or \\
+    escapes inside them.
+    
+    Example:
+    
+       .echo foo             prints: foo
+       .echo foo  bar        prints: foo bar
+       .echo "foo  bar"      prints: foo  bar
+       .echo \"\"foo  bar\"" prints: "foo  bar"
+       .echo \"x\ny"         prints: x
+                                     y
+                                     
+    See also: <a href='#.printf'>.printf</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.fpaccel</span>
+Control floating-point math pack acceleration
+</summary>
+<a id='.fpaccel'>
+<pre>
+    Selectively enables or disables math pack acceleration routines.
+
+      .fpaccel               (List enable/disable status)
+      .fpaccel -e address    (Enable acceleration for specific routine)
+      .fpaccel -d address    (Disable acceleration for specific routine)
+
+    Enables or disables specific routine hooks when floating-point acceleration
+    is enabled. The hook is selected by the calling address of the routine.
+    By default, all supported routines are enabled for acceleration. These hooks
+    and the .fpaccel command only have an effect when the global option for
+    FP acceleration is enabled.
+
+    Note that in mixed radix mode, FADD is the address $FADD; (FADD) must be
+    used to select the symbol.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.gtia</span>
+Display GTIA status
+</summary>
+<a id='.gtia'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ide</span>
+Display IDE emulator status
+</summary>
+<a id='.ide'>
+<pre>
+    Displays the current state of the emulated IDE device.
+    
+      .ide
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ide_dumpsec</span>
+Dump IDE raw sector
+</summary>
+<a id='.ide_dumpsec'>
+<pre>
+    Dumps the contents of a raw IDE hard disk sector.
+    
+      .ide_dumpsec [-l] &lt;lba&gt;
+      
+    Reads a sector by linear block address (LBA) and displays the contents.
+    This bypasses the ATA interface, so it can be done unobtrusively even if
+    the emulated device is in reset state or in the middle of a command.
+    
+      -l    Dump only every other byte (16-bit mode on 8-bit bus).
+      
+    See also: <a href='#.ide_rdsec'>.ide_rdsec</a>, <a href='#.ide_wrsec'>.ide_wrsec</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ide_rdsec</span>
+Read IDE sector into memory
+</summary>
+<a id='.ide_rdsec'>
+<pre>
+    Reads an IDE sector into CPU memory.
+    
+      .ide_rdsec [-l] &lt;lba&gt; &lt;address&gt;
+      
+    Reads a sector by linear block address (LBA) into CPU memory. This
+    bypasses the ATA interface, so it can be done unobtrusively even if the
+    emulated device is in reset state or in the middle of a command. 512
+    bytes are read by default, or 256 if -l is specified.
+
+      -l    Read only every other byte (16-bit mode on 8-bit bus).
+      
+    See also: <a href='#.ide_dumpsec'>.ide_dumpsec</a>, <a href='#.ide_wrsec'>.ide_wrsec</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ide_wrsec</span>
+Write IDE sector from memory
+</summary>
+<a id='.ide_wrsec'>
+<pre>
+    Writes an IDE sector from CPU memory.
+    
+      .ide_wrsec [-l] &lt;lba&gt; &lt;address&gt;
+      
+    Writes a sector by linear block address (LBA) from CPU memory. This
+    bypasses the ATA interface, so it can be done unobtrusively even if the
+    emulated device is in reset state or in the middle of a command. 512
+    bytes are read by default, or 256 if -l is specified.
+
+      -l    Write only every other byte (16-bit mode on 8-bit bus). The
+            high byte is set to $FF.
+      
+    See also: <a href='#.ide_dumpsec'>.ide_dumpsec</a>, <a href='#.ide_wrsec'>.ide_wrsec</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.iocb</span>
+Display CIO I/O control blocks
+</summary>
+<a id='.iocb'>
+<pre>
+    Displays the contents of the nine IOCBs used by CIO.
+    
+      .iocb
+      
+    The zero-page IOCB, or ZIOCB, displayed as ZP. It is only valid during
+    CIO operation.
+    
+    A device name including an ID and a tilde, e.g. $50~R:, is reported for
+    a provisionally open IOCB. An IOCB is provisionally opened when the OS
+    successfully receives a device response to a type 4 poll for a missing
+    CIO device on the SIO bus. Further I/O to this IOCB with the HNDLOD
+    variable set will trigger a load of the handler from the device into
+    memory. The reported ID is the SIO address of the device to be used
+    for handler loading.
+    
+    See also: <a href='#.tracecio'>.tracecio</a>, <a href='#.ciodevs'>.ciodevs</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.kmkjzide</span>
+Display KMK/JZ IDE / IDEPlus 2.0 status
+</summary>
+<a id='.kmkjzide'>
+<pre>
+    Displays the status of the KMK/JZ IDE or IDEPlus 2.0 device.
+
+       .kmkjzide
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.loadksym</span>
+Load kernel symbols
+</summary>
+<a id='.loadksym'>
+<pre>
+    Loads kernel symbols for the original 10K OS.
+    
+      .loadksym &lt;file&gt;
+      
+    Loads a symbol file for a module at $D800-FFFF.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.loadobj</span>
+Load executable object
+</summary>
+<a id='.loadobj'>
+<pre>
+    Loads an executable object from a file.
+    
+      .loadobj &lt;file&gt;
+      
+    &lt;file&gt; must be an executable object in Atari DOS executable format.
+    INITAD and RUNAD segments are skipped and no changes to execution state
+    are made other than to load program segments into memory. This is
+    intended to allow helper modules to be loaded into RAM.
+    
+    See also: <a href='#.readmem'>.readmem</a>, <a href='#.writemem'>.writemem</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.loadstate</span>
+Load simulation state
+</summary>
+<a id='.loadstate'>
+<pre>
+      .loadstate &lt;path&gt;
+
+    Loads emulation state from the given save state file. This is the same
+    format as used when the Load State command in the UI is used, with the
+    default extension being .atstate2.
+
+    The .loadstate command cannot load the old Altirra V1 save state format
+    (*.altstate). Use the UI Load State command to load old save state files.
+
+    See also: <a href='#.savestate'>.savestate</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.loadsym</span>
+Load module symbols
+</summary>
+<a id='.loadsym'>
+<pre>
+    Loads module symbols from a symbol file.
+    
+      .loadsym &lt;file&gt;
+      
+    Two types of symbols are supported. A labels file allows the debugger to
+    match addresses to labels, while a listing file permits source-level
+    debugging. Both label and listing files can be loaded at the same time,
+    and multiple sets of symbols can also be loaded.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.logopen</span>
+Open log file
+</summary>
+<a id='.logopen'>
+<pre>
+    Records all console output to a log file.
+
+      .logopen &lt;file&gt;
+
+    Closes any existing log file and opens a new one. All subsequent console
+    output is recorded to the file until the log file is closed.
+
+    See also: <a href='#.logclose'>.logclose</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.logclose</span>
+Close log file
+</summary>
+<a id='.logclose'>
+<pre>
+    Closes any currently open log file.
+
+      .logclose
+
+    See also: <a href='#.logopen'>.logopen</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.map</span>
+Show memory map layers
+</summary>
+<a id='.map'>
+<pre>
+    Displays memory layers active in the memory mapper
+    
+      .map
+      
+    This displays the memory layers that are being tracked internally in
+    the emulator.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.netpcap, .netpcapclose</span>
+Capture packet trace from emulation network
+</summary>
+<a id='.netpcap'>
+<pre>
+      .netpcap &lt;file&gt;      (Begin packet trace to file)
+      .netpcapclose        (End packet trace)
+
+    Begins capturing all packets from the emulation network and logging them
+    to a packet trace file. The file is written in libpcap-compatible format,
+    which can be used with tools such as tcpdump and Wireshark.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.netstat</span>
+Display network connection status
+</summary>
+<a id='.netstat'>
+<pre>
+    Shows UDP/IP and TCP/IP connections on the emulated network.
+    
+      .netstat
+      
+    Displays a list of connections maintained by the gateway on the emulated
+    network. This only applies if DragonCart emulation is active.
+    
+    Five columns are shown:
+    
+      Proto:
+          Protocol for connection (TCP/UDP).
+          
+      Local address:
+          Emulation-side address as seen by the gateway. This is typically
+          the address provided by the program driving the DragonCart and
+          will be on the emulation subnet.
+          
+      Foreign address:
+          The other address of connection, either the gateway itself or an
+          external host.
+          
+      State:
+          TCP connection state
+      
+      NAT address:
+          Host address used by NAT gateway for external connections. This
+          is the address that the external server sees the connection from.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.onexeclear, .onexelist, .onexeload, .onexerun</span>
+Executable command triggers
+</summary>
+<a id='.onexeclear'>
+<pre>
+    Queue commands for when an executable loads or runs.
+    
+      .onexeclear          (Clear queued commands)
+      .onexelist           (List queued commands)
+      .onexeload &lt;command&gt; (Queue command prior to executable load)
+      .onexerun &lt;command&gt;  (Queue command prior to executable run)
+      
+    This allows debugger commands to be automatically issued when
+    an executable loads or runs. The on-load commands are issued
+    before the first segment is loaded, while the on-run commands
+    are issued before the run vector is activated. Commands are
+    removed from the queue after they are run.
+    
+    The on-exe commands only trigger when an executable is loaded
+    by the simulator itself. They do not activate when an executable
+    is loaded by DOS, which is invisible to the simulator.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.pagesums</span>
+Display checksum map of memory pages
+</summary>
+<a id='.pagesums'>
+<pre>
+    Display a map of checksum bytes for all 256 pages of memory.
+
+      .pagesums
+
+    Each byte in the map is a checksum of all bytes in that page. This allows
+    for quick verification against another instance to see which pages are
+    the same or different. At the end of each line is a row checksum, which is
+    computed over all of the page checksums in that row; this allows for quick
+    checking of rows (16 x 256 bytes = 4KB).
+
+    The checksums are computed over the CPU memory space, so they will show
+    whatever data is currently visible to the CPU at that address in the current
+    cycle.
+    
+    For convenience, a zeroed page has a checksum of $00.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.pathdump, .pathrecord, .pathreset, .pathbreak</span>
+Manage execution path recording
+</summary>
+<a id='.pathdump'>
+<pre>
+    Record and dump instruction paths executed by the CPU.
+
+      .pathrecord [on|off] (Show or change path recording setting) 
+      .pathreset           (Clear recorded paths)
+      .pathdump &lt;file&gt;     (Dump path disassembly to a file)
+      .pathbreak [on|off]  (Show or change new path break setting)
+    
+    Path recording, when enabled, marks the addresses of branch targets
+    and subroutines during execution, making it easier to follow
+    execution flow in a disassembly and identifying which memory areas
+    are confirmed to contain code. When enabled, the diassembly will
+    also show pseudo-labels for any addresses not already marked with
+    a symbol.
+    
+    The .pathbreak command permits halting execution whenever a new
+    path is encountered. This is handy for identifying the exit path
+    in a large frame loop, as the body of the loop can be captured and
+    then .pathbreak enabled to capture the exit path.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.pbi</span>
+Display Parallel Bus Interface (PBI) status
+</summary>
+<a id='.pbi'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.pclink</span>
+Display PCLink status
+</summary>
+<a id='.pclink'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.pia</span>
+Display Peripheral Interface Adapter (PIA) status 
+</summary>
+<a id='.pia'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.pokey</span>
+Display POKEY status
+</summary>
+<a id='.pokey'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.printf</span>
+Display message with formatted fields
+</summary>
+<a id='.printf'>
+<pre>
+    Writes a string to the console window with formatted fields.
+    
+      .printf "format-string" [field...]
+
+    Format-string can contain formatted fields like the C library
+    function printf(). Formatting specifiers are of the form:
+    
+      %[flags][width][.precision][length]type
+
+    Flags:
+      
+      0        Apply zero padding to right-justified string
+      #        Prefix %x output with 0x and %X output with 0X
+      +        Always display +/- sign on numbers
+      &lt;space&gt;  Prefix positive numbers with a space
+      -        Left-justify formatted field
+      
+    Width is a positive number specifying the minimum characters to
+    display for the field. If the formatted field is shorter than
+    the width, the field is padded according to flags, with right
+    justification with spaces being the default.
+    
+    Precision is a non-negative number specifying minimum number of
+    digits to display for numeric types. Zeroes are prepended to
+    the number if it has fewer digits than the specified precision.
+    
+    Both width and precision may be specified as variable (*) in
+    order to set them via separate expressions. If variable, the
+    width and precision arguments come before the value argument,
+    in that order. The values are clamped to avoid disasters.
+    
+    Length specifies the size of an integer field:
+    
+      hh       Byte (8-bit)
+      h        Word (16-bit)
+      l        Long (32-bit) (default)
+    
+    Type specifies the field type:
+    
+      %b       Binary number
+      %c       ASCII character (only 20-7E; others produce '.')
+      %d       Signed decimal
+      %e       Decimal float by address, exponential notation
+      %f       Decimal float by address, floating-point notation
+      %g       Decimal float by address, general notation
+      %i       Signed decimal (equivalent to %d)
+      %s       ATASCII string buffer by address ($20-7F)
+      %S       ATASCII string buffer by address (high byte term.)
+      %u       Unsigned decimal
+      %x       Hexadecimal (lowercase)
+      %X       Hexadecimal (uppercase)
+      %y       Symbol address
+
+    Unlike the C function printf(), .printf always prints a newline
+    after the formatted string. Also, note that %e/%f/%g require
+    the address of a decimal float and not the value of a binary
+    float.
+    
+    Example:
+      .printf "Display list vector: $%04x" dw(vdslst)
+
+    See also: <a href='#.echo'>.echo</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.profile_beginframe, .profile_endframe</span>
+Trigger profiler frames
+</summary>
+<a id='.profile_beginframe'>
+<pre>
+    Starts or ends a frame in the CPU profiler.
+
+     .profile_beginframe   Trigger start of profiler frame
+     .profile_endframe     Trigger end of profiler frame
+
+    The .profile_beginframe and .profile_endframe commands can be
+    used with conditional breakpoints to trigger frame boundaries
+    with complex conditions. Note that any frame triggers set in
+    the profiler itself will still fire even when these commands
+    are used. If profiling is not active, these commands are
+    silently ignored.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.rapidus</span>
+Display Rapidus status
+</summary>
+<a id='.rapidus'>
+<pre>
+    Displays status of the Rapidus Accelerator device, if present.
+
+      .rapidus
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.readmem</span>
+Read memory from disk
+</summary>
+<a id='.readmem'>
+<pre>
+    Read a block of data from a file on disk into memory.
+
+      .readmem &lt;path&gt; &lt;xaddress&gt; [L&lt;length&gt;]
+      
+    The address may use extended memory syntax, i.e. v:4000 for VBXE
+    memory.
+    
+    See also: <a href='#.loadobj'>.loadobj</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.reload</span>
+Reload symbol files
+</summary>
+<a id='.reload'>
+<pre>
+    Re-reads symbol files for all currently loaded symbols.
+    
+      .reload
+      
+    See also: <a href='#lm'>lm (list modules)</a>, <a href='#.loadsym'>.loadsym</a>, <a href='#.unloadsym'>.unloadsym</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.restart</span>
+Restart emulated system
+</summary>
+<a id='.restart'>
+<pre>
+    Performs a cold reset.
+    
+      .restart
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.riot</span>
+Dump 6532 RIOT status
+</summary>
+<a id='.riot'>
+<pre>
+      .riot
+
+    Displays the status of any 6532 RAM Input/Output Timer (RIOT) chips
+    in the system, particularly those in disk drives (full drive emulation
+    only).
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.savestate</span>
+Save simulation state
+</summary>
+<a id='.savestate'>
+<pre>
+      .savestate &lt;path&gt;
+
+    Saves emulation state to the given save state file. This is the same format
+    as used when the Save State command in the UI is used, with the default
+    extension being .atstate2.
+
+    Unlike the UI, the .savestate command does not attempt to step the
+    simulation to the next CPU instruction boundary and will save a state
+    mid-instruction.
+
+    See also: <a href='#.loadstate'>.loadstate</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.side3</span>
+Dump SIDE3 status
+</summary>
+<a id='.side3'>
+<pre>
+      .side3
+
+    Displays internal SIDE3 device state.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.sdx_loadsyms</span>
+Load SpartaDOS X symbols
+</summary>
+<a id='.sdx_loadsyms'>
+<pre>
+    Loads symbols from the SpartaDOS X symbol table.
+    
+      .sdx_loadsyms [address]
+      
+    By default, this follows the symbol chain starting with the pointer
+    at address DOSVEC+$127. An alternate override address for the pointer
+    can be specified. The loaded symbols are placed in a module called
+    SDX. If this module exists, it is cleared before being reloaded.
+    
+    NOTE: This command can only see the full set of symbols if the SDX
+    library is banked in. Otherwise, only resident symbols outside of
+    the library bank will be seen. This isn't a problem during normal
+    operation because the library bank has to be enabled for either
+    symbol resolution or to call library functions.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.sio</span>
+Dump SIO device control block (DCB)
+</summary>
+<a id='.sio'>
+<pre>
+    Displays the contents of the SIO device control block.
+    
+      .sio [-b]
+      
+    The -b option gives one-line abbreviated output.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.sourcemode</span>
+Switch between source and disassembly level debugging
+</summary>
+<a id='.sourcemode'>
+<pre>
+    Selects or displays the current source debugging mode.
+    
+      .sourcemode [on|off]
+      
+    The debugger can optionally jump to source code whenever appropriate
+    symbols are available. By default, this happens only when single
+    stepping or resuming execution from a source code window. By using
+    the .sourcemode command and the -n option of the g (Go) command,
+    however, you can force source mode debugging. This is most useful
+    in scripts.
+    
+    See also: <a href='#g'>g (Go)</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.sprintf</span>
+Construct message with formatted fields
+</summary>
+<a id='.sprintf'>
+<pre>
+    Constructs a string with formatted fields.
+    
+      .sprintf "format-string" [field...]
+
+    Expands format tokens in the format-string with the supplied fields
+    and stores it in the @ts variable. This variable can then be used
+    by subsequent commands that take a text string, such as .printf,
+    .sprintf, and bt.
+
+    The format-string is the same format as that used by the .printf
+    command.
+
+    See also: <a href='#.printf'>.printf</a>, <a href='#bt'>bt</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.sum</span>
+Compute sum of memory range
+</summary>
+<a id='.sum'>
+<pre>
+    Computes the sum of bytes in a memory range.
+    
+      .sum [-w] address L&lt;length&gt;
+      
+    All bytes within the memory range are added and both the binary sum
+    and the one's complement (carry wraparound) sum are reported.
+    
+    If -w is specified, a sum of words is computed instead. The inverted
+    and byte-swapped checksum is also reported for TCP/IP purposes.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.tape</span>
+Display cassette tape deck status
+</summary>
+<a id='.tape'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.tapedata</span>
+Display cassette tape data
+</summary>
+<a id='.tapedata'>
+<pre>
+    Displays data from the currently loaded cassette tape.
+    
+      .tapedata [-t] [-b &lt;baud&gt; [-d]] [-r &lt;pos&gt;] [-p &lt;pos&gt;] [-s &lt;pos&gt;] [-y]
+      
+      -t           Display bit transitions
+      -b &lt;baud&gt;    Decode data at given baud rate
+      -d           Display only decoded bytes
+      -r &lt;pos&gt;     Decode at offset in milliseconds from current position
+      -p &lt;pos&gt;     Decode at absolute position in milliseconds
+      -s &lt;pos&gt;     Decode at absolute position in samples
+      -y           Bypass FSK decoder (turbo mode)
+      
+    The .tapedata command displays the data near the current tape
+    position. By default, the raw internally stored data bits are
+    displayed at 4Kbaud. If the -t flag is specified, only the locations
+    of transitions are displayed.
+    
+    The -b flag specifies byte decoding at a specified baud rate and
+    causes the debugger to attempt to identify byte locations through
+    start and stop bits. The -d flag causes only decoded bytes and not
+    intermediate data bits to be displayed.
+    
+    The decoding algorithm is similar but not the same as that which
+    actually occurs during simulation, which has an additional low pass
+    filter on the serial input based on the serial rate. The debugger
+    can also misdecode the initial bytes due to starting from ground
+    state.
+    
+    See also: <a href='#.tape'>.tape</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.tracecio</span>
+Toggle CIO call tracing
+</summary>
+<a id='.tracecio'>
+<pre>
+    Logs calls to the operating system's Character Input/Output (CIO)
+    facility.
+
+      .tracecio [on|off]
+
+    If enabled, calls to the CIOV vector are trapped and the parameters
+    for the active IOCB are reported to the console.
+
+    See also: <a href='#.tracesio'>.tracesio</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.traceser</span>
+Toggle serial I/O port tracing
+</summary>
+<a id='.traceser'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.tracesio</span>
+Toggle SIO call tracing
+</summary>
+<a id='.tracesio'>
+<pre>
+    Logs calls to the operating system's Serial Input/Output (CIO)
+    facility.
+
+      .tracesio [on|off]
+
+    If enabled, calls to the SIOV vector are trapped and the parameters
+    in the device control block (DCB) are reported to the console.
+
+    See also: <a href='#.tracecio'>.tracecio</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.ultimate</span>
+Dump Ultimate1MB status
+</summary>
+<a id='.ultimate'>
+<pre>
+    Displays the state of the Ultimate1MB expansion hardware.
+    
+       .ultimate1mb
+       
+    See also: <a href='#.ds1305'>.ds1305</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.unloadsym</span>
+Unload module symbols
+</summary>
+<a id='.unloadsym'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.vbxe</span>
+Display VBXE status
+</summary>
+<a id='.vbxe'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.vbxe_bl</span>
+Display VBXE blit list (BL)
+</summary>
+<a id='.vbxe_bl'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.vbxe_pal</span>
+Display VBXE palette
+</summary>
+<a id='.vbxe_pal'>
+<pre>
+    Displays entries from the VBXE palette.
+
+       .vbxe_pal [&lt;offset&gt;] [L&lt;length&gt;]
+
+    Displays RGB colors from the VBXE palette memory, which has four banks
+    of 256 colors with 21 bits each. The values are displayed in RGB form as
+    24-bit integers; the LSB of each byte is zero as it does not exist.
+
+    By default, all 256 colors are displayed from the bank specified by
+    the PSEL register. If offset is specified, it is a value from 0-1023
+    selecting a specific color and bank ($304 = color $04 from bank 3). Length
+    specifies the number of colors to display.
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.vbxe_traceblits</span>
+Toggle VBXE blit tracing
+</summary>
+<a id='.vbxe_traceblits'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.vbxe_xdl</span>
+Display VBXE extended display list (XDL)
+</summary>
+<a id='.vbxe_xdl'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.vectors</span>
+Display kernel vectors
+</summary>
+<a id='.vectors'>
+<pre>
+    Intentionally Blank
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.warmreset</span>
+Warm reset simulation
+</summary>
+<a id='.warmreset'>
+<pre>
+    Resets the simulation hardware (XL/XE) or triggers the System Reset
+    button logic (400/800).
+    
+       .warmreset
+       
+    See also: <a href='#.restart'>.restart</a>
+
+</pre>
+</a>
+</details>
+<details>
+<summary>
+<span class='cmd'>.writemem</span>
+Write memory to disk
+</summary>
+<a id='.writemem'>
+<pre>
+    Write a block of memory to a file on disk.
+
+      .writemem &lt;path&gt; &lt;xaddress&gt; L&lt;length&gt;
+      
+    The address may use extended memory syntax, i.e. v:4000 for VBXE
+    memory.
+
+</pre>
+</a>
+</details>
+<hr/>
+<pre>
+Commands &lt;xaddress&gt; accept extended addresses:
+  $0000      CPU view of primary memory
+  $01:0000   CPU view, 65C816 high memory
+  $EF'4000   CPU view, extended memory ($4000 with PORTB=$EF)
+  n:$0000    ANTIC view of primary memory
+  v:$00000   VBXE memory
+  r:$0000    Main memory
+  x:$00000   Extended memory
+  t:$01'A000 Cartridge memory, banked view (bank $01, address $A000)
+
+Some commands support length syntax:
+  db siov L100
+  db 4000 L&gt;5FFF
+
+Commands taking &lt;path&gt; also accept ? to interactively select the file.
+
+Use .help &lt;command&gt; for detailed help on that command.
+</pre>
+<hr/>
+<small>Copyright (C) 2008-2023 Avery Lee, All Rights Reserved.</small>
+</body>
+</html>

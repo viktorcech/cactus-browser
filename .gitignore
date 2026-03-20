@@ -1,0 +1,14 @@
+bin/browser.xex
+bin/browser.lst
+bin/browser.lab
+bin/browser.atr
+bin/disk/BROWSER.XEX
+bin/disk/AUTORUN.SYS
+build_*.txt
+test.asm
+test.xex
+*.jpg
+*.png
+.claude/
+memory-notes/
+__pycache__/
