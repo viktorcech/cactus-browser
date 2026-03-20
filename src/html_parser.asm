@@ -52,6 +52,8 @@ ENTITY_BUF_SZ  = 8
         sta zp_in_skip
         sta is_closing
         sta in_title
+        sta img_has_pending
+        sta img_src_len
         rts
 .endp
 
@@ -453,17 +455,16 @@ parse_chunk_done
         sta zp_in_skip
         rts
 ?oimg   jsr render_flush_word
-        ; Show [IMG] placeholder with src URL if available
-        lda #<m_img
-        ldx #>m_img
-        jsr render_string
         lda img_src_len
         beq ?nourl
-        lda #<img_src_buf
-        ldx #>img_src_buf
-        jsr render_string
-        lda #<m_img_end
-        ldx #>m_img_end
+        ; Store image URL for later fetching (after page loads)
+        lda img_has_pending
+        bne ?nourl             ; only one image per page for now
+        lda #1
+        sta img_has_pending
+        ; Show placeholder
+        lda #<m_img
+        ldx #>m_img
         jsr render_string
 ?nourl  rts
 ?ohr    jsr render_flush_word
@@ -475,8 +476,7 @@ parse_chunk_done
         jsr render_newline
         rts
 
-m_img     dta c'[IMG:',0
-m_img_end dta c']',0
+m_img     dta c'[IMG]',0
 .endp
 
 ; Remaining close tag checks
@@ -902,5 +902,6 @@ IMG_SRC_SIZE = 128
 
 img_src_buf .ds IMG_SRC_SIZE
 img_src_len dta b(0)
+img_has_pending dta b(0)
 
 ; Link storage is in data.asm (at $9200+ to avoid MEMAC B conflict)

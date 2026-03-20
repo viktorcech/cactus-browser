@@ -115,6 +115,7 @@ no_vbxe cli
         icl 'renderer.asm'
         icl 'keyboard.asm'
         icl 'ui.asm'
+        icl 'img_fetch.asm'
         icl 'history.asm'
         icl 'data.asm'
 

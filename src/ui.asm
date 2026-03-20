@@ -61,10 +61,16 @@ m_help  dta c' #:Link  U:URL  B:Back  Q:Quit  ',0
         beq ?back
         cmp #'B'
         beq ?back
+        ; === DEBUG KEYS (remove later) ===
         cmp #'t'
         beq ?test
         cmp #'T'
         beq ?test
+        cmp #'i'
+        beq ?img
+        cmp #'I'
+        beq ?img
+        ; === END DEBUG KEYS ===
 
         cmp #'0'
         bcc ?loop
@@ -86,12 +92,22 @@ m_help  dta c' #:Link  U:URL  B:Back  Q:Quit  ',0
         jsr http_navigate
         jmp ?loop
 
-?test   jsr vbxe_test_image
-        jsr kbd_get            ; wait for keypress
-        jsr vbxe_img_hide      ; restore text
+; === DEBUG HANDLERS (remove later) ===
+?img    jsr img_fetch_test
+        bcs ?loop
+        jsr kbd_get
+        jsr vbxe_img_hide
         jsr ui_init
         jsr show_welcome
         jmp ?loop
+
+?test   jsr vbxe_test_image
+        jsr kbd_get
+        jsr vbxe_img_hide
+        jsr ui_init
+        jsr show_welcome
+        jmp ?loop
+; === END DEBUG HANDLERS ===
 
 ?link   sec
         sbc #'0'
