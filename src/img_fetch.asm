@@ -1,79 +1,35 @@
 ; ============================================================================
-; Image Fetch Module - Download and display VBXE image via FujiNet
+; Image Fetch Module - Download and display VBXE images via FujiNet
 ; Format: 2B width(LE) + 1B height + 768B palette + w*h pixels
+; Images shown fullscreen one at a time after page loads
 ; ============================================================================
-
-img_test_url dta c'N:https://turiecfoto.sk/vbxe.php?url=https://picsum.photos/160/100&w=160&h=100',0
 
 img_hdr_w   dta a(0)
 img_hdr_h   dta b(0)
 img_pal_cnt dta a(0)
+img_timeout dta b(0)
+img_saved_key dta b($FF)     ; saved key from abort ($FF=none)
+img_fetch_idx dta b(0)       ; current image being fetched
+
+; Max retries before timeout (each retry ~100ms = ~150 retries = ~15 sec)
+IMG_MAX_RETRIES = 150
 
 ; ----------------------------------------------------------------------------
-; img_fetch_test - Fetch and display test image
-; Press I in browser
+; img_check_abort - Check if user pressed a key (non-blocking)
+; Output: C=1 if key pressed (abort), C=0 continue
 ; ----------------------------------------------------------------------------
-.proc img_fetch_test
-        jsr ui_status_loading
-
-        lda #<img_test_url
-        ldx #>img_test_url
-        jsr http_set_url
-
-        jsr fn_open
-        bcc ?ok1
-        jmp ?err_open
-?ok1
-        ; Read 3-byte header
-        jsr img_read_header
-        bcc ?ok2
-        jmp ?err_read
-?ok2
-        ; Allocate VRAM
-        lda img_hdr_h
-        ldx img_hdr_w
-        ldy img_hdr_w+1
-        jsr vbxe_img_alloc
-        bcc ?ok3
-        jmp ?err_read
-?ok3
-        ; Read palette
-        jsr img_read_palette
-        bcc ?ok4
-        jmp ?err_read
-?ok4
-        ; Set VBXE palette
-        lda #<img_pal_buf
-        sta zp_tmp_ptr
-        lda #>img_pal_buf
-        sta zp_tmp_ptr+1
-        jsr vbxe_img_setpal
-
-        ; Read pixels
-        jsr vbxe_img_begin_write
-        jsr img_read_pixels
-        jsr vbxe_img_end_write
-
-        jsr fn_close
-
-        ; Show image at row 4
-        lda #4
-        jsr vbxe_img_show
-        jsr ui_status_done
-        clc
-        rts
-
-?err_read
-        jsr fn_close
-?err_open
-        jsr ui_status_error
-        lda #<m_imgerr
-        ldx #>m_imgerr
-        jsr ui_show_error
+.proc img_check_abort
+        lda CH
+        cmp #KEY_NONE
+        beq ?no
+        ; Save key for later replay, then clear CH
+        sta img_saved_key
+        lda #KEY_NONE
+        sta CH
         sec
         rts
-
-m_imgerr dta c'Image load failed',0
+?no     clc
+        rts
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -81,19 +37,40 @@ m_imgerr dta c'Image load failed',0
 ; Output: img_hdr_w, img_hdr_h set, C=0 ok
 ; ----------------------------------------------------------------------------
 .proc img_read_header
-        ; Wait for 3 bytes
-?wt     jsr fn_status
-        bcs ?err
+        lda #IMG_MAX_RETRIES
+        sta img_timeout
+
+?wt     jsr img_check_abort
+        bcs ?e_abort
+
+        jsr fn_status
+        bcs ?e_sio
+        lda zp_fn_error
+        bmi ?chk_fatal
+        jmp ?no_err
+?chk_fatal
+        cmp #136
+        beq ?e_eof
+        jmp ?e_fatal
+?no_err
+        lda zp_fn_bytes_hi
+        bne ?read
         lda zp_fn_bytes_lo
         cmp #3
-        bcc ?wt
+        bcs ?read
+        lda zp_fn_connected
+        beq ?e_disc
+        dec img_timeout
+        beq ?e_tout
+        wait_frames 6
+        jmp ?wt
 
-        lda #3
+?read   lda #3
         sta zp_fn_bytes_lo
         lda #0
         sta zp_fn_bytes_hi
         jsr fn_read
-        bcs ?err
+        bcs ?e_sio2
 
         lda rx_buffer
         sta img_hdr_w
@@ -101,11 +78,49 @@ m_imgerr dta c'Image load failed',0
         sta img_hdr_w+1
         lda rx_buffer+2
         sta img_hdr_h
+        ; Sanity check: width 8-320, height 8-192
+        lda img_hdr_w+1
+        cmp #2
+        bcs ?e_san
+        cmp #1
+        bne ?chk_lo
+        lda img_hdr_w
+        cmp #$41
+        bcs ?e_san
+        jmp ?chk_h
+?chk_lo lda img_hdr_w
+        cmp #8
+        bcc ?e_san
+?chk_h  lda img_hdr_h
+        cmp #8
+        bcc ?e_san
+        cmp #193
+        bcs ?e_san
         clc
         rts
-?err    sec
+?e_abort lda #1
+        jmp ?fail
+?e_sio  lda #2
+        jmp ?fail
+?e_eof  lda #3
+        jmp ?fail
+?e_fatal sta img_fn_err
+        lda #4
+        jmp ?fail
+?e_disc lda #5
+        jmp ?fail
+?e_tout lda #6
+        jmp ?fail
+?e_sio2 lda #7
+        jmp ?fail
+?e_san  lda #8
+?fail   sta img_err_code
+        sec
         rts
 .endp
+
+img_err_code dta b(0)
+img_fn_err   dta b(0)
 
 ; ----------------------------------------------------------------------------
 ; img_read_palette - Read 768 bytes of palette data
@@ -119,8 +134,18 @@ m_imgerr dta c'Image load failed',0
         lda #0
         sta img_pal_cnt
         sta img_pal_cnt+1
+        lda #IMG_MAX_RETRIES
+        sta img_timeout
 
-?lp     jsr fn_status
+?lp     jsr img_check_abort
+        bcs ?err
+
+        jsr fn_status
+        bcs ?err
+        lda zp_fn_error
+        cmp #136
+        beq ?err
+        cmp #128
         bcs ?err
         lda zp_fn_bytes_lo
         ora zp_fn_bytes_hi
@@ -131,7 +156,9 @@ m_imgerr dta c'Image load failed',0
         lda zp_rx_len
         beq ?lp
 
-        ; Copy to palette buffer
+        lda #IMG_MAX_RETRIES
+        sta img_timeout
+
         ldy #0
 ?cp     cpy zp_rx_len
         beq ?chk
@@ -147,8 +174,7 @@ m_imgerr dta c'Image load failed',0
 ?nc1    inc img_pal_cnt
         bne ?nc2
         inc img_pal_cnt+1
-?nc2    ; Check if 768 ($300) bytes done
-        lda img_pal_cnt+1
+?nc2    lda img_pal_cnt+1
         cmp #3
         bcs ?done
         iny
@@ -160,12 +186,9 @@ m_imgerr dta c'Image load failed',0
 ?done   clc
         rts
 
-?wait   ldx #2
-?dly    lda RTCLOK+2
-?dw     cmp RTCLOK+2
-        beq ?dw
-        dex
-        bne ?dly
+?wait   dec img_timeout
+        beq ?err
+        wait_frames 6
         jmp ?lp
 
 ?err    sec
@@ -174,43 +197,48 @@ m_imgerr dta c'Image load failed',0
 
 ; ----------------------------------------------------------------------------
 ; img_read_pixels - Stream pixel data into VBXE VRAM
-; Must call vbxe_img_begin_write first
 ; Output: C=0 ok
 ; ----------------------------------------------------------------------------
 .proc img_read_pixels
-?lp     jsr fn_status
+        lda #IMG_MAX_RETRIES
+        sta img_timeout
+
+?lp     jsr img_check_abort
+        bcs ?err
+
+        jsr fn_status
         bcs ?err
         lda zp_fn_error
+        bmi ?chk_fatal
+        jmp ?no_err
+?chk_fatal
         cmp #136
         beq ?done
-        lda zp_fn_connected
-        beq ?done
+        jmp ?err
+?no_err
         lda zp_fn_bytes_lo
         ora zp_fn_bytes_hi
-        beq ?wait
+        beq ?no_data
 
         jsr fn_read
         bcs ?err
         lda zp_rx_len
         beq ?lp
 
-        ; Write to VRAM
-        ldy #0
-?wr     cpy zp_rx_len
-        beq ?lp
-        lda rx_buffer,y
-        sty zp_tmp3
-        jsr vbxe_img_write_byte
-        ldy zp_tmp3
-        iny
-        jmp ?wr
+        lda #IMG_MAX_RETRIES
+        sta img_timeout
 
-?wait   ldx #2
-?dly    lda RTCLOK+2
-?dw     cmp RTCLOK+2
-        beq ?dw
-        dex
-        bne ?dly
+        jsr vbxe_img_write_chunk
+        jmp ?lp
+
+?no_data
+        lda zp_fn_connected
+        beq ?done
+
+        dec img_timeout
+        beq ?done
+
+        wait_frames 6
         jmp ?lp
 
 ?done   clc
@@ -218,6 +246,322 @@ m_imgerr dta c'Image load failed',0
 ?err    sec
         rts
 .endp
+
+; ----------------------------------------------------------------------------
+; img_copy_queue_url - Copy URL from img_queue_urls[img_fetch_idx] to img_src_buf
+; ----------------------------------------------------------------------------
+.proc img_copy_queue_url
+        ; Calculate source: img_queue_urls + idx * 256
+        ; idx * 256 = add idx to high byte
+        lda #<img_queue_urls
+        sta zp_tmp_ptr
+        lda #>img_queue_urls
+        clc
+        adc img_fetch_idx
+        sta zp_tmp_ptr+1
+        ; Copy to img_src_buf
+        ldy #0
+?cp     lda (zp_tmp_ptr),y
+        sta img_src_buf,y
+        beq ?done
+        iny
+        bne ?cp                ; max 255 chars
+?done   rts
+.endp
+
+; ----------------------------------------------------------------------------
+; img_resolve_and_build_url - Resolve img_src_buf and build vbxe.php URL
+; ----------------------------------------------------------------------------
+.proc img_resolve_and_build_url
+        ; Copy img_src_buf to url_buffer for resolve
+        ldy #0
+?ri     lda img_src_buf,y
+        sta url_buffer,y
+        beq ?rid
+        iny
+        bne ?ri
+?rid    sty url_length
+        lda #0
+        sta url_length+1
+        jsr http_resolve_url
+        ; Strip N: prefix back to img_src_buf
+        ldy #0
+        lda url_buffer
+        cmp #'N'
+        bne ?nb
+        lda url_buffer+1
+        cmp #':'
+        bne ?nb
+        ldy #2
+?nb     ldx #0
+?rc     lda url_buffer,y
+        sta img_src_buf,x
+        beq ?rcd
+        iny
+        inx
+        cpx #IMG_SRC_SIZE-1
+        bne ?rc
+        lda #0
+        sta img_src_buf,x
+?rcd
+        ; Build: prefix + img_src_buf + suffix
+        ldy #0
+?pfx    lda m_prefix,y
+        beq ?pfxd
+        sta url_buffer,y
+        iny
+        bne ?pfx
+?pfxd   ldx #0
+?src    lda img_src_buf,x
+        beq ?srcd
+        sta url_buffer,y
+        iny
+        inx
+        cpy #URL_BUF_SIZE-20
+        bcc ?src
+?srcd   ldx #0
+?sfx    lda m_suffix,x
+        sta url_buffer,y
+        beq ?sfxd
+        iny
+        inx
+        bne ?sfx
+?sfxd   sty url_length
+        lda #0
+        sta url_length+1
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
+; img_fetch_single - Fetch and display a single image from img_src_buf
+; Called when user clicks on [N]IMG link
+; ----------------------------------------------------------------------------
+.proc img_fetch_single
+        jsr ui_status_img_loading
+
+        ; Resolve relative URL and build vbxe.php converter URL
+        jsr img_resolve_and_build_url
+
+        ; Close any previous connection
+        jsr fn_close
+        ; Delay between connections
+        wait_frames 30
+
+        ; Open connection
+        jsr fn_open
+        bcs ?err
+
+        ; Read header
+        jsr img_read_header
+        bcs ?err_close
+
+        ; Allocate VRAM
+        lda img_hdr_h
+        ldx img_hdr_w
+        ldy img_hdr_w+1
+        jsr vbxe_img_alloc
+        bcs ?err_close
+
+        ; Read palette
+        jsr img_read_palette
+        bcs ?err_close
+
+        ; Set VBXE palette
+        lda #<img_pal_buf
+        sta zp_tmp_ptr
+        lda #>img_pal_buf
+        sta zp_tmp_ptr+1
+        jsr vbxe_img_setpal
+
+        ; Read pixels
+        jsr vbxe_img_begin_write
+        jsr img_read_pixels
+
+        jsr fn_close
+
+        ; Write status text
+        status_msg COL_YELLOW, m_imgview
+
+        ; Show image fullscreen
+        jsr vbxe_img_show_fullscreen
+
+        ; Wait for user key
+        jsr kbd_get
+
+        ; Restore text display
+        jsr vbxe_img_hide
+        jsr setup_palette
+        jsr ui_status_done
+        rts
+
+?err_close
+        jsr fn_close
+?err    lda #<m_imgerr
+        ldx #>m_imgerr
+        jsr ui_show_error
+        rts
+
+m_imgview dta c' Image - press any key',0
+m_imgerr  dta c'Image load failed',0
+.endp
+
+; ----------------------------------------------------------------------------
+; img_fetch_page - Fetch and display all queued images fullscreen
+; Called after page loads if img_queue_count > 0
+; Each image shown on separate screen, Space=next, Q=quit
+; ----------------------------------------------------------------------------
+.proc img_fetch_page
+        lda img_queue_count
+        bne ?go
+        rts
+?go
+        ; Clear any leftover key
+        lda #KEY_NONE
+        sta CH
+        sta img_saved_key
+        lda #0
+        sta img_fetch_idx
+        sta img_count
+
+?loop   lda img_fetch_idx
+        cmp img_queue_count
+        bcc ?fetch
+        jmp ?all_done
+
+?fetch  jsr ui_status_img_loading
+
+        ; Copy URL from queue
+        jsr img_copy_queue_url
+        ; Resolve and build vbxe.php URL
+        jsr img_resolve_and_build_url
+
+        ; Close any previous connection
+        jsr fn_close
+        ; Delay between connections
+        wait_frames 30
+
+        ; Open connection
+        jsr fn_open
+        bcc ?ok1
+        jmp ?img_err
+
+?ok1    ; Read header
+        jsr img_read_header
+        bcc ?ok2
+        jsr fn_close
+        jmp ?img_err
+
+?ok2    ; Allocate VRAM (always at VRAM_IMG_BASE)
+        lda img_hdr_h
+        ldx img_hdr_w
+        ldy img_hdr_w+1
+        jsr vbxe_img_alloc
+        bcc ?ok3
+        jsr fn_close
+        jmp ?img_err
+
+?ok3    ; Read palette
+        jsr img_read_palette
+        bcc ?ok4
+        jsr fn_close
+        jmp ?img_err
+
+?ok4    ; Set VBXE palette
+        lda #<img_pal_buf
+        sta zp_tmp_ptr
+        lda #>img_pal_buf
+        sta zp_tmp_ptr+1
+        jsr vbxe_img_setpal
+
+        ; Read pixels
+        jsr vbxe_img_begin_write
+        jsr img_read_pixels
+
+        jsr fn_close
+
+        ; Image loaded successfully
+        inc img_count
+
+        ; Write status text to status bar (before switching XDL)
+        jsr img_show_status
+
+        ; Show image fullscreen
+        jsr vbxe_img_show_fullscreen
+
+        ; Wait for user key
+        jsr kbd_get
+        cmp #'q'
+        beq ?quit
+        cmp #'Q'
+        beq ?quit
+        cmp #27                ; ESC
+        beq ?quit
+
+        ; Restore text display for next image or end
+        jsr vbxe_img_hide
+        jsr setup_palette
+
+?img_next
+        inc img_fetch_idx
+        jmp ?loop
+
+?img_err
+        ; Skip this image, continue to next
+        jmp ?img_next
+
+?quit   ; User wants to stop - restore text display
+        jsr vbxe_img_hide
+        jsr setup_palette
+
+?all_done
+        jsr ui_status_done
+
+        ; Replay any saved key
+        lda img_saved_key
+        cmp #KEY_NONE
+        beq ?no_key
+        sta CH
+?no_key rts
+
+.endp
+
+; ----------------------------------------------------------------------------
+; img_show_status - Write image status text to status bar
+; Shows "Image N/M  Spc:next Q:quit" on STATUS_ROW
+; ----------------------------------------------------------------------------
+.proc img_show_status
+        status_msg COL_YELLOW, m_imgstat
+        ; Re-set yellow attr for extra text after macro
+        lda #COL_YELLOW
+        jsr vbxe_setattr
+        ; Current number
+        lda img_count
+        clc
+        adc #'0'
+        jsr vbxe_putchar
+        ; "/"
+        lda #'/'
+        jsr vbxe_putchar
+        ; Total
+        lda img_queue_count
+        clc
+        adc #'0'
+        jsr vbxe_putchar
+        ; " Spc:next Q:quit"
+        lda #<m_imgkeys
+        ldx #>m_imgkeys
+        jsr vbxe_print
+        lda #ATTR_NORMAL
+        jsr vbxe_setattr
+        rts
+
+m_imgstat dta c' Image ',0
+m_imgkeys dta c'  Spc:next Q:quit',0
+.endp
+
+; Image URL prefix/suffix (global, used by img_resolve_and_build_url)
+m_prefix dta c'N:https://turiecfoto.sk/vbxe.php?url=',0
+m_suffix dta c'&w=320&h=184&iw=320',0
 
 ; Palette buffer (768 bytes)
 img_pal_buf .ds 768

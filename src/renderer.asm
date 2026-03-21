@@ -28,6 +28,9 @@
         sta zp_scroll_pos+1
         sta zp_page_lines
         sta zp_page_lines+1
+        sta page_abort
+        lda #$FF
+        sta pending_link
         rts
 .endp
 
@@ -43,6 +46,8 @@
         beq ?space
 
         ; Non-space: add to word buffer
+        ldx #0
+        stx last_was_sp
         ldx zp_word_len
         cpx #WORD_BUF_SZ-1
         bcs ?skip
@@ -134,6 +139,7 @@
 
 ; ----------------------------------------------------------------------------
 ; render_do_nl - Internal: advance to next line
+; When content area is full, pause for user input (pagination)
 ; ----------------------------------------------------------------------------
 .proc render_do_nl
         lda #0
@@ -144,67 +150,95 @@
         lda zp_render_row
         cmp #CONTENT_BOT+1
         bcc ?ok
-        jsr scroll_content
-        dec zp_render_row
-?ok     rts
-.endp
 
-; ----------------------------------------------------------------------------
-; scroll_content - Scroll content area (rows 2-22) up by 1
-; ----------------------------------------------------------------------------
-.proc scroll_content
-        memb_on 0
+        ; Page full - wait for user
+        jsr render_page_pause
+        bcs ?abort
 
-        ldx #CONTENT_TOP
-?rowlp  cpx #CONTENT_BOT
-        beq ?clrlast
-
-        stx zp_tmp1
-        ; Source = row X+1
-        inx
-        lda row_addr_lo,x
-        sta zp_tmp_ptr
-        lda row_addr_hi,x
-        sta zp_tmp_ptr+1
-        ; Dest = row X (tmp1)
-        ldx zp_tmp1
-        lda row_addr_lo,x
-        sta zp_tmp_ptr2
-        lda row_addr_hi,x
-        sta zp_tmp_ptr2+1
-
-        ldy #0
-?cp     lda (zp_tmp_ptr),y
-        sta (zp_tmp_ptr2),y
-        iny
-        cpy #SCR_STRIDE
-        bne ?cp
-
-        inx
-        bne ?rowlp
-
-?clrlast
-        lda row_addr_lo,x
-        sta zp_tmp_ptr2
-        lda row_addr_hi,x
-        sta zp_tmp_ptr2+1
-
-        ldy #0
-?cl     lda #CH_SPACE
-        sta (zp_tmp_ptr2),y
-        iny
-        lda #COL_BLACK
-        sta (zp_tmp_ptr2),y
-        iny
-        cpy #SCR_STRIDE
-        bne ?cl
-
-        memb_off
+        ; User wants next page - clear content and reset
+        jsr ui_clear_content
+        lda #CONTENT_TOP
+        sta zp_render_row
 
         inc zp_page_lines
         bne ?ok
         inc zp_page_lines+1
 ?ok     rts
+
+?abort  ; User pressed Q - set abort flag
+        lda #1
+        sta page_abort
+        dec zp_render_row
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
+; render_page_pause - Show "--More--" prompt, wait for key
+; Output: C=0 continue, C=1 abort
+; ----------------------------------------------------------------------------
+.proc render_page_pause
+        status_msg COL_YELLOW, m_more
+
+?wait   ; Non-blocking loop: check keyboard and mouse
+        ; Wait one frame (vsync)
+        lda RTCLOK+2
+?vs     cmp RTCLOK+2
+        beq ?vs
+
+        ; Update mouse cursor
+        jsr mouse_show_cursor
+
+        ; Check mouse button click
+        lda zp_mouse_btn
+        beq ?no_click
+        lda #0
+        sta zp_mouse_btn
+        ; Is cursor over a link?
+        jsr mouse_check_link
+        bcs ?click_cont        ; not on link — treat as "next page"
+        ; A = link number — store as pending
+        sta pending_link
+        jmp ?next              ; continue page (will follow link after)
+?click_cont
+        ; Click not on link = "next page" (like Space)
+        jmp ?next
+
+?no_click
+        ; Check keyboard (non-blocking via CH)
+        lda CH
+        cmp #KEY_NONE
+        beq ?wait              ; no input, loop
+        ; Key available — kbd_get returns immediately via CIO
+        jsr kbd_get
+        cmp #CH_SPACE
+        beq ?next
+        cmp #155               ; ATASCII Return
+        beq ?next
+        cmp #'q'
+        beq ?quit
+        cmp #'Q'
+        beq ?quit
+        jmp ?wait
+
+?next   ; Hide mouse cursor and force redraw on next show
+        jsr mouse_hide_cursor
+        lda #$FF
+        sta zp_mouse_prev_x   ; force full redraw in next mouse_show_cursor
+
+        ; Restore status bar to loading
+        status_msg COL_YELLOW, m_loading
+        clc
+        rts
+
+?quit   jsr mouse_hide_cursor
+        lda #$FF
+        sta zp_mouse_prev_x   ; force full redraw
+        sta pending_link       ; $FF = no pending link
+        sec
+        rts
+
+m_more    dta c' -- More -- (Spc/Q)',0
+m_loading dta c' Loading...',0
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -333,6 +367,8 @@
 ; Renderer state
 last_was_sp dta 0
 title_len   dta 0
+page_abort  dta 0
+pending_link dta $FF           ; $FF = none, 0-31 = link number to follow
 
 WORD_BUF_SZ = 80
 word_buf    .ds WORD_BUF_SZ

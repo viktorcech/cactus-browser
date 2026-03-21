@@ -1,6 +1,6 @@
 ; ============================================================================
 ; VBXE Web Browser for Atari XE/XL
-; Requires: VBXE + FujiNet or 850 Interface Module
+; Requires: VBXE + FujiNet
 ; Assembler: MADS
 ; Build: mads browser.asm -o:browser.xex
 ; ============================================================================
@@ -12,7 +12,6 @@
 
 ; ============================================================================
 ; Main program
-; 850 R: handler loads automatically during Atari boot via SIO
 ; ============================================================================
         org $3000
 
@@ -31,17 +30,15 @@
         cli
 
         jsr kbd_init
+        jsr mouse_init
         jsr history_init
         jsr html_reset
         jsr render_reset
         jsr ui_init
         jsr show_welcome
-        jsr net_init
-        jsr ui_init
-        jsr show_welcome
         jsr ui_main_loop
-        jsr shutdown
-        jmp (COLDSV)
+        ; ui_main_loop never returns (Q goes to welcome screen)
+        ; To exit browser, user presses Reset on Atari
 
 no_vbxe cli
         lda #$22
@@ -86,20 +83,6 @@ no_vbxe cli
         rts
 .endp
 
-; ----------------------------------------------------------------------------
-; shutdown
-; ----------------------------------------------------------------------------
-.proc shutdown
-        jsr net_shutdown
-        ldy #VBXE_VCTL
-        lda #0
-        sta (zp_vbxe_base),y
-        memb_off
-        lda #$22
-        sta SDMCTL
-        rts
-.endp
-
 ; ============================================================================
 ; Include all modules
 ; ============================================================================
@@ -108,7 +91,6 @@ no_vbxe cli
         icl 'vbxe_text.asm'
         icl 'vbxe_gfx.asm'
         icl 'fujinet.asm'
-        icl 'modem850.asm'
         icl 'network.asm'
         icl 'http.asm'
         icl 'html_parser.asm'
@@ -117,6 +99,7 @@ no_vbxe cli
         icl 'ui.asm'
         icl 'img_fetch.asm'
         icl 'history.asm'
+        icl 'mouse.asm'
         icl 'data.asm'
 
 ; ============================================================================

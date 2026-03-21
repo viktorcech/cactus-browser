@@ -170,6 +170,17 @@ row_addr_hi
 .endp
 
 ; ----------------------------------------------------------------------------
+; vbxe_scroll_content - Scroll content area (rows 2-22) up by 1 via blitter
+; Uses chained BCBs: scroll rows 3-22 up + clear row 22
+; No MEMAC B needed - blitter works directly with VRAM addresses
+; ----------------------------------------------------------------------------
+.proc vbxe_scroll_content
+        blit_start (VRAM_BCB + BCB_CONTENT_SCROLL_OFS)
+        blit_wait
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
 ; vbxe_fill_row - Fill row with color (A=row, X=color index)
 ; ----------------------------------------------------------------------------
 .proc vbxe_fill_row
@@ -196,3 +207,40 @@ row_addr_hi
         memb_off
         rts
 .endp
+
+; ----------------------------------------------------------------------------
+; vbxe_read_vram - Read byte from VRAM via MEMAC B
+; MUST be below $4000! Called by code above $4000 (mouse module).
+; Input: zp_tmp_ptr = MEMAC B window address, Y = byte offset
+; Output: A = byte read
+; Clobbers: Y (via memb_on/memb_off)
+; ----------------------------------------------------------------------------
+.proc vbxe_read_vram
+        sty vbxe_rw_off
+        memb_on 0
+        ldy vbxe_rw_off
+        lda (zp_tmp_ptr),y
+        sta vbxe_rw_val
+        memb_off
+        lda vbxe_rw_val
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
+; vbxe_write_vram - Write byte to VRAM via MEMAC B
+; Input: zp_tmp_ptr = MEMAC B window address, Y = byte offset, A = value
+; Clobbers: A, Y (via memb_on/memb_off)
+; ----------------------------------------------------------------------------
+.proc vbxe_write_vram
+        sta vbxe_rw_val
+        sty vbxe_rw_off
+        memb_on 0
+        ldy vbxe_rw_off
+        lda vbxe_rw_val
+        sta (zp_tmp_ptr),y
+        memb_off
+        rts
+.endp
+
+vbxe_rw_val dta 0
+vbxe_rw_off dta 0

@@ -31,9 +31,9 @@
         lda #0
         sta (zp_vbxe_base),y
 
-        ; Enable VBXE: XDL + XCOLOR + NO_TRANS
+        ; Enable VBXE: XDL + XCOLOR (index 0 = transparent → shows ANTIC COLBK)
         ldy #VBXE_VCTL
-        lda #VC_XDL_ENABLED | VC_XCOLOR | VC_NO_TRANS
+        lda #VC_XDL_ENABLED | VC_XCOLOR
         sta (zp_vbxe_base),y
 
         ; Disable ANTIC DMA
@@ -218,12 +218,53 @@ bcb_data
         dta $81                        ; Pattern
         dta $00                        ; Control: normal
 
+; BCB 3: Scroll content area only (rows 2-22), offset 63
+        ; Source: row CONTENT_TOP+1 (row 3)
+        dta <(VRAM_SCREEN + (CONTENT_TOP+1) * SCR_STRIDE)
+        dta >(VRAM_SCREEN + (CONTENT_TOP+1) * SCR_STRIDE)
+        dta 0
+        dta a(SCR_STRIDE)
+        dta 1
+        ; Dest: row CONTENT_TOP (row 2)
+        dta <(VRAM_SCREEN + CONTENT_TOP * SCR_STRIDE)
+        dta >(VRAM_SCREEN + CONTENT_TOP * SCR_STRIDE)
+        dta 0
+        dta a(SCR_STRIDE)
+        dta 1
+        dta a(SCR_STRIDE - 1)
+        dta CONTENT_BOT - CONTENT_TOP - 1  ; 19 = copy 20 rows (3→2 .. 22→21)
+        dta $FF
+        dta $00
+        dta $00
+        dta 0
+        dta $00
+        dta $08                        ; Control: chain to next BCB
+
+; BCB 4: Clear last content row (row 22), offset 84
+        dta <VRAM_PATTERN, >VRAM_PATTERN, 0
+        dta a(0)
+        dta 1
+        dta <(VRAM_SCREEN + CONTENT_BOT * SCR_STRIDE)
+        dta >(VRAM_SCREEN + CONTENT_BOT * SCR_STRIDE)
+        dta 0
+        dta a(SCR_STRIDE)
+        dta 1
+        dta a(SCR_STRIDE - 1)
+        dta 0                          ; 1 row
+        dta $FF
+        dta $00
+        dta $00
+        dta 0
+        dta $81                        ; Pattern: 2-byte repeat
+        dta $00                        ; Control: normal (end)
+
 BCB_DATA_LEN = * - bcb_data
 .endp
 
 BCB_CLS_OFS    = 0
 BCB_SCROLL_OFS = 21
 BCB_CLRLAST_OFS = 42
+BCB_CONTENT_SCROLL_OFS = 63
 
 ; ----------------------------------------------------------------------------
 ; setup_palette - Init VBXE overlay palette 1 (8 colors)

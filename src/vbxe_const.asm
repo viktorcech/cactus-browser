@@ -111,6 +111,9 @@ COL_YELLOW     = 7
 ATTR_NORMAL    = COL_WHITE
 ATTR_LINK      = COL_BLUE
 ATTR_HEADING   = COL_ORANGE
+ATTR_H1        = COL_YELLOW
+ATTR_H2        = COL_ORANGE
+ATTR_H3        = COL_GREEN
 ATTR_URL       = COL_GREEN
 ATTR_ERROR     = COL_RED
 ATTR_DECOR     = COL_GRAY
@@ -204,24 +207,58 @@ zp_scroll_pos  = $A5   ; 2 bytes
 zp_page_lines  = $A7   ; 2 bytes
 zp_hist_ptr    = $A9
 zp_fn_got_data = $AA
-zp_net_device  = $AB   ; 0=FujiNet, 1=Modem/850
-zp_modem_online = $AC  ; 1=serial port active
-zp_img_ptr     = $AD   ; 2 bytes - image write pointer (MEMAC B window)
+zp_img_ptr     = $AB   ; 2 bytes - image write pointer (MEMAC B window)
+zp_memb_shadow = $AD   ; MEMAC B shadow for NMI-safe restore
+zp_tirq_saved  = $AE   ; Timer IRQ: saved shadow value
+zp_vbi_saved   = $AF   ; VBI: saved shadow value
 
 ; ----------------------------------------------------------------------------
 ; Macros
 ; ----------------------------------------------------------------------------
 
+; MEMAC B macros with shadow variable for interrupt-safe restore.
+; IMPORTANT: Code using these macros MUST be below $4000!
+; When MEMAC B is active, $4000-$7FFF reads VRAM, not RAM.
+; Interrupt handlers use stubs at page 6 to disable/restore MEMAC B.
 memb_on .macro
-        ldy #VBXE_MEMAC_B
         lda #$80+:1
+        sta zp_memb_shadow     ; shadow FIRST (NMI-safe ordering)
+        ldy #VBXE_MEMAC_B
         sta (zp_vbxe_base),y
         .endm
 
 memb_off .macro
-        ldy #VBXE_MEMAC_B
         lda #0
+        sta zp_memb_shadow     ; shadow FIRST (NMI-safe ordering)
+        ldy #VBXE_MEMAC_B
         sta (zp_vbxe_base),y
+        .endm
+
+; Show message on status bar: :1=color, :2=message address
+status_msg .macro
+        lda #STATUS_ROW
+        ldx #:1
+        jsr vbxe_fill_row
+        lda #STATUS_ROW
+        ldx #0
+        jsr vbxe_setpos
+        lda #:1
+        jsr vbxe_setattr
+        lda #<:2
+        ldx #>:2
+        jsr vbxe_print
+        lda #ATTR_NORMAL
+        jsr vbxe_setattr
+        .endm
+
+; Wait N frames (RTCLOK-based delay): :1=frame count
+wait_frames .macro
+        ldx #:1
+?wfdly  lda RTCLOK+2
+?wfdw   cmp RTCLOK+2
+        beq ?wfdw
+        dex
+        bne ?wfdly
         .endm
 
 blit_start .macro

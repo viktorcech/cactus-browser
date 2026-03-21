@@ -35,10 +35,19 @@ TAG_DIV        = 20
 TAG_SPAN       = 21
 TAG_PRE        = 22
 TAG_HR         = 23
+TAG_NOSCRIPT   = 24
+TAG_TABLE      = 25
+TAG_TR         = 26
+TAG_TD         = 27
+TAG_TH         = 28
+TAG_BLOCKQUOTE = 29
+TAG_DT         = 30
+TAG_DD         = 31
+TAG_CODE       = 32
 
 TAG_BUF_SIZE   = 16
 ATTR_BUF_SIZE  = 16
-VAL_BUF_SIZE   = 128
+VAL_BUF_SIZE   = 256
 ENTITY_BUF_SZ  = 8
 
 .proc html_reset
@@ -52,8 +61,10 @@ ENTITY_BUF_SZ  = 8
         sta zp_in_skip
         sta is_closing
         sta in_title
-        sta img_has_pending
+        sta img_queue_count
         sta img_src_len
+        sta utf8_skip
+        sta td_count
         rts
 .endp
 
@@ -71,6 +82,8 @@ in_quotes  dta 0
         ; fall through to parse_loop_re
 
 parse_loop_re
+        lda page_abort
+        bne parse_chunk_done   ; user pressed Q - stop processing
         ldy chunk_idx
         cpy zp_rx_len
         beq parse_chunk_done
@@ -106,7 +119,27 @@ parse_chunk_done
         cmp #'&'
         beq ?start_ent
 
-        ldx zp_in_skip
+        ; UTF-8 filtering: skip multi-byte sequences
+        ldx utf8_skip
+        bne ?utf8_cont
+        cmp #$C0               ; 2-byte UTF-8 lead (C0-DF)?
+        bcc ?ascii
+        cmp #$E0               ; 3-byte UTF-8 lead (E0-EF)?
+        bcc ?utf2
+        cmp #$F0               ; 4-byte UTF-8 lead (F0-F7)?
+        bcc ?utf3
+        jmp parse_loop_re      ; >= F0: skip
+?utf2   lda #1
+        sta utf8_skip
+        jmp parse_loop_re      ; skip lead byte, skip 1 more
+?utf3   lda #2
+        sta utf8_skip
+        jmp parse_loop_re      ; skip lead byte, skip 2 more
+?utf8_cont
+        dec utf8_skip
+        jmp parse_loop_re      ; skip continuation byte
+
+?ascii  ldx zp_in_skip
         bne ?skip
         jsr html_emit_char
 ?skip   jmp parse_loop_re
@@ -119,6 +152,7 @@ parse_chunk_done
         sta zp_attr_idx
         sta zp_val_idx
         sta is_closing
+        sta img_src_len
         jmp parse_loop_re
 
 ?start_ent
@@ -356,6 +390,25 @@ parse_chunk_done
 .proc process_tag
         jsr lookup_tag
 
+        ; In skip mode (script/style/noscript), only process their
+        ; closing tags - ignore everything else inside the block
+        ldx zp_in_skip
+        beq ?not_skip
+        ldx is_closing
+        beq ?skip_ret
+        cmp #TAG_SCRIPT
+        beq ?cls
+        cmp #TAG_STYLE
+        beq ?cls
+        cmp #TAG_NOSCRIPT
+        beq ?cls
+?skip_ret rts
+?cls    ; Clear skip mode directly (can't use close_tag_more - Z flag issue)
+        lda #0
+        sta zp_in_skip
+        rts
+
+?not_skip
         ldx is_closing
         bne ?closing
 
@@ -445,7 +498,9 @@ parse_chunk_done
         beq ?ohr
         cmp #TAG_DIV
         beq ?odiv
-        rts
+        cmp #TAG_NOSCRIPT
+        beq ?onoscript
+        jmp open_tag_tbl
 
 ?otitle jsr render_flush_word
         lda #1
@@ -454,18 +509,11 @@ parse_chunk_done
 ?oskip  lda #1
         sta zp_in_skip
         rts
+?onoscript jmp ?oskip
 ?oimg   jsr render_flush_word
         lda img_src_len
         beq ?nourl
-        ; Store image URL for later fetching (after page loads)
-        lda img_has_pending
-        bne ?nourl             ; only one image per page for now
-        lda #1
-        sta img_has_pending
-        ; Show placeholder
-        lda #<m_img
-        ldx #>m_img
-        jsr render_string
+        jsr store_img_as_link
 ?nourl  rts
 ?ohr    jsr render_flush_word
         jsr render_newline
@@ -473,8 +521,12 @@ parse_chunk_done
         jsr render_newline
         rts
 ?odiv   jsr render_flush_word
-        jsr render_newline
-        rts
+        ; Only line-break if we have content on current line
+        ; (avoids blank line spam from deeply nested divs)
+        lda zp_render_col
+        beq ?dskip
+        jsr render_do_nl
+?dskip  rts
 
 m_img     dta c'[IMG]',0
 .endp
@@ -486,9 +538,11 @@ m_img     dta c'[IMG]',0
         beq ?cskip
         cmp #TAG_STYLE
         beq ?cskip
+        cmp #TAG_NOSCRIPT
+        beq ?cskip
         cmp #TAG_DIV
         beq ?cdiv
-        rts
+        jmp close_tag_tbl
 
 ?ctitle lda #0
         sta in_title
@@ -499,18 +553,166 @@ m_img     dta c'[IMG]',0
         sta zp_parse_state
         rts
 ?cdiv   jsr render_flush_word
+        lda zp_render_col
+        beq ?dskip
+        jsr render_do_nl
+?dskip  rts
+.endp
+
+; --- Table, blockquote, dt/dd, code, pre open tags ---
+.proc open_tag_tbl
+        cmp #TAG_TABLE
+        beq ?otable
+        cmp #TAG_TR
+        beq ?otr
+        cmp #TAG_TD
+        beq ?otd
+        cmp #TAG_TH
+        beq ?oth
+        cmp #TAG_BLOCKQUOTE
+        beq ?obq
+        cmp #TAG_DT
+        beq ?odt
+        cmp #TAG_DD
+        beq ?odd
+        cmp #TAG_CODE
+        beq ?ocode
+        cmp #TAG_PRE
+        beq ?opre
+        rts
+
+?otable jsr render_flush_word
         jsr render_newline
+        lda #0
+        sta td_count
+        rts
+?otr    jsr render_flush_word
+        jsr render_newline
+        lda #0
+        sta td_count
+        rts
+?otd    jsr render_flush_word
+        lda td_count
+        beq ?td_first
+        lda #<m_tbl_sep
+        ldx #>m_tbl_sep
+        jsr render_string
+?td_first
+        inc td_count
+        rts
+?oth    jsr render_flush_word
+        lda td_count
+        beq ?th_first
+        lda #<m_tbl_sep
+        ldx #>m_tbl_sep
+        jsr render_string
+?th_first
+        inc td_count
+        lda #ATTR_H3
+        jsr render_set_attr
+        rts
+?obq    jsr render_flush_word
+        jsr render_newline
+        lda zp_indent
+        clc
+        adc #2
+        sta zp_indent
+        rts
+?odt    jsr render_flush_word
+        jsr render_newline
+        lda #ATTR_H3
+        jsr render_set_attr
+        rts
+?odd    jsr render_flush_word
+        jsr render_newline
+        lda zp_indent
+        clc
+        adc #2
+        sta zp_indent
+        rts
+?ocode  lda #ATTR_DECOR
+        jsr render_set_attr
+        rts
+?opre   jsr render_flush_word
+        jsr render_newline
+        lda #ATTR_DECOR
+        jsr render_set_attr
+        rts
+
+m_tbl_sep dta c' | ',0
+.endp
+
+; --- Table, blockquote, dt/dd, code, pre close tags ---
+.proc close_tag_tbl
+        cmp #TAG_TABLE
+        beq ?ctable
+        cmp #TAG_TH
+        beq ?cth
+        cmp #TAG_BLOCKQUOTE
+        beq ?cbq
+        cmp #TAG_DT
+        beq ?cdt
+        cmp #TAG_DD
+        beq ?cdd
+        cmp #TAG_CODE
+        beq ?ccode
+        cmp #TAG_PRE
+        beq ?cpre
+        rts
+
+?ctable jsr render_flush_word
+        jsr render_newline
+        rts
+?cth    lda #ATTR_NORMAL
+        jsr render_set_attr
+        rts
+?cbq    jsr render_flush_word
+        jsr render_newline
+        lda zp_indent
+        sec
+        sbc #2
+        bcs ?bq_ok
+        lda #0
+?bq_ok  sta zp_indent
+        rts
+?cdt    lda #ATTR_NORMAL
+        jsr render_set_attr
+        rts
+?cdd    lda zp_indent
+        sec
+        sbc #2
+        bcs ?dd_ok
+        lda #0
+?dd_ok  sta zp_indent
+        rts
+?ccode  lda #ATTR_NORMAL
+        jsr render_set_attr
+        rts
+?cpre   jsr render_flush_word
+        jsr render_newline
+        lda #ATTR_NORMAL
+        jsr render_set_attr
         rts
 .endp
 
 ; Tag action procs
 .proc open_heading
+        pha
         jsr render_flush_word
         jsr render_newline
         lda #1
         sta zp_in_heading
-        lda #ATTR_HEADING
-        jsr render_set_attr
+        pla
+        cmp #TAG_H1
+        beq ?h1
+        cmp #TAG_H2
+        beq ?h2
+        lda #ATTR_H3
+        jmp ?set
+?h1     lda #ATTR_H1
+        jmp ?set
+?h2     lda #ATTR_H2
+?set    jsr render_set_attr
         rts
 .endp
 
@@ -645,6 +847,7 @@ m_img     dta c'[IMG]',0
 
 ?chk_src
         ; Check "src" attribute (for <img> tags)
+        ; Must match exactly "src" (not "srcset" etc.)
         lda attr_name_buf
         cmp #'s'
         bne ?done
@@ -654,6 +857,8 @@ m_img     dta c'[IMG]',0
         lda attr_name_buf+2
         cmp #'c'
         bne ?done
+        lda attr_name_buf+3
+        bne ?done              ; must be null (reject "srcset")
         jsr store_img_src
 ?done   rts
 .endp
@@ -664,12 +869,12 @@ m_img     dta c'[IMG]',0
 MAX_LINKS      = 32
 LINK_URL_SIZE  = 128
 
-.proc store_link_url
-        lda zp_link_num
-        cmp #MAX_LINKS
-        bcs ?full
-
-        lda zp_link_num
+; ============================================================================
+; calc_link_addr - Calculate address of link_urls[A]
+; Input: A = link index (0-31)
+; Output: zp_tmp_ptr = address of link_urls[A] (128-byte slot)
+; ============================================================================
+.proc calc_link_addr
         lsr
         tax
         lda #0
@@ -680,6 +885,16 @@ LINK_URL_SIZE  = 128
         txa
         adc #>link_urls
         sta zp_tmp_ptr+1
+        rts
+.endp
+
+.proc store_link_url
+        lda zp_link_num
+        cmp #MAX_LINKS
+        bcs ?full
+
+        lda zp_link_num
+        jsr calc_link_addr
 
         ldy #0
 ?cp     lda attr_val_buf,y
@@ -697,7 +912,7 @@ LINK_URL_SIZE  = 128
 ; ============================================================================
 ; lookup_tag
 ; ============================================================================
-NUM_TAGS = 23
+NUM_TAGS = 32
 
 .proc lookup_tag
         ldx #0
@@ -748,6 +963,15 @@ ts_div    dta c'div',0
 ts_span   dta c'span',0
 ts_pre    dta c'pre',0
 ts_hr     dta c'hr',0
+ts_noscript dta c'noscript',0
+ts_table  dta c'table',0
+ts_tr     dta c'tr',0
+ts_td     dta c'td',0
+ts_th     dta c'th',0
+ts_blockquote dta c'blockquote',0
+ts_dt     dta c'dt',0
+ts_dd     dta c'dd',0
+ts_code   dta c'code',0
 
 tag_tbl_lo
         dta <ts_h1, <ts_h2, <ts_h3, <ts_p
@@ -755,7 +979,9 @@ tag_tbl_lo
         dta <ts_li, <ts_b, <ts_strong, <ts_i
         dta <ts_em, <ts_title, <ts_script, <ts_style
         dta <ts_img, <ts_input, <ts_form, <ts_div
-        dta <ts_span, <ts_pre, <ts_hr
+        dta <ts_span, <ts_pre, <ts_hr, <ts_noscript
+        dta <ts_table, <ts_tr, <ts_td, <ts_th
+        dta <ts_blockquote, <ts_dt, <ts_dd, <ts_code
 
 tag_tbl_hi
         dta >ts_h1, >ts_h2, >ts_h3, >ts_p
@@ -763,14 +989,18 @@ tag_tbl_hi
         dta >ts_li, >ts_b, >ts_strong, >ts_i
         dta >ts_em, >ts_title, >ts_script, >ts_style
         dta >ts_img, >ts_input, >ts_form, >ts_div
-        dta >ts_span, >ts_pre, >ts_hr
+        dta >ts_span, >ts_pre, >ts_hr, >ts_noscript
+        dta >ts_table, >ts_tr, >ts_td, >ts_th
+        dta >ts_blockquote, >ts_dt, >ts_dd, >ts_code
 
 tag_ids dta TAG_H1, TAG_H2, TAG_H3, TAG_P
         dta TAG_BR, TAG_A, TAG_UL, TAG_OL
         dta TAG_LI, TAG_B, TAG_STRONG, TAG_I
         dta TAG_EM, TAG_TITLE, TAG_SCRIPT, TAG_STYLE
         dta TAG_IMG, TAG_INPUT, TAG_FORM, TAG_DIV
-        dta TAG_SPAN, TAG_PRE, TAG_HR
+        dta TAG_SPAN, TAG_PRE, TAG_HR, TAG_NOSCRIPT
+        dta TAG_TABLE, TAG_TR, TAG_TD, TAG_TH
+        dta TAG_BLOCKQUOTE, TAG_DT, TAG_DD, TAG_CODE
 
 ; ============================================================================
 ; Entity decoding
@@ -874,6 +1104,8 @@ tag_ids dta TAG_H1, TAG_H2, TAG_H3, TAG_P
 ; State variables
 is_closing     dta 0
 in_title       dta 0
+utf8_skip      dta 0          ; bytes remaining to skip in UTF-8 sequence
+td_count       dta 0          ; table cell count in current row
 
 ; Buffers
 tag_name_buf   .ds TAG_BUF_SIZE
@@ -884,9 +1116,11 @@ entity_buf     .ds ENTITY_BUF_SZ
 ; ============================================================================
 ; store_img_src - Save src attribute value from <img> tag
 ; ============================================================================
-IMG_SRC_SIZE = 128
+IMG_SRC_SIZE = 256
 
 .proc store_img_src
+        ; Just copy attr_val_buf to img_src_buf (temp storage)
+        ; Actual link storage happens in store_img_as_link when tag closes
         ldy #0
 ?cp     lda attr_val_buf,y
         sta img_src_buf,y
@@ -900,8 +1134,57 @@ IMG_SRC_SIZE = 128
         rts
 .endp
 
-img_src_buf .ds IMG_SRC_SIZE
+; ============================================================================
+; store_img_as_link - Store IMG URL as link with "I:" prefix
+; Shows [N]IMG with link color. URL stored as "I:" + img_src_buf in link_urls[]
+; ============================================================================
+.proc store_img_as_link
+        ; Check link_num < MAX_LINKS
+        lda zp_link_num
+        cmp #MAX_LINKS
+        bcs ?full
+
+        lda zp_link_num
+        jsr calc_link_addr
+
+        ; Write "I:" prefix
+        lda #'I'
+        ldy #0
+        sta (zp_tmp_ptr),y
+        iny
+        lda #':'
+        sta (zp_tmp_ptr),y
+        iny
+
+        ; Copy img_src_buf after prefix (max 125 chars to fit in 128B slot)
+        ldx #0
+?cp     lda img_src_buf,x
+        sta (zp_tmp_ptr),y
+        beq ?ok
+        iny
+        inx
+        cpy #LINK_URL_SIZE-1
+        bne ?cp
+        lda #0
+        sta (zp_tmp_ptr),y
+
+?ok     ; Show [N]IMG with link attr
+        lda #ATTR_LINK
+        jsr render_set_attr
+        jsr render_link_prefix     ; shows [N]
+        lda #<m_imgtxt
+        ldx #>m_imgtxt
+        jsr render_string          ; shows "IMG"
+        lda #ATTR_NORMAL
+        jsr render_set_attr
+        inc zp_link_num
+?full   rts
+
+m_imgtxt dta c'IMG',0
+.endp
+
+img_src_buf .ds IMG_SRC_SIZE       ; temp buffer for fetch
 img_src_len dta b(0)
-img_has_pending dta b(0)
+img_skip_cnt dta b(0)
 
 ; Link storage is in data.asm (at $9200+ to avoid MEMAC B conflict)
