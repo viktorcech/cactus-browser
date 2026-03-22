@@ -6,7 +6,7 @@
 
 ## Status
 
-**Alpha 49** — early development, testing on real hardware. Help is welcome!
+**Alpha 50** — early development, testing on real hardware. Help is welcome!
 
 ## Requirements
 
@@ -25,7 +25,7 @@
 - **HTML entity decoding** — `&amp;` `&lt;` `&gt;` `&nbsp;` `&quot;` and numeric `&#NNN;`
 - **HTML comment support** — `<!-- -->` properly parsed and skipped
 - **UTF-8 filtering** — multi-byte sequences skipped gracefully
-- **Image viewing** — inline images shown as clickable `[N]IMG` links, fullscreen 256-color display (up to 320×192) via server-side converter
+- **Image viewing** — inline images shown as clickable `[N]IMG` links, fullscreen 256-color display (up to 320×192) via server-side converter, uses N2: device so page download continues after viewing
 - **Up to 64 links per page** with palette-encoded link detection, recycled on each page scroll
 - **Word wrapping** — intelligent wrapping at word boundaries with indentation support
 - **Skip to heading** — press H during `--More--` prompt to jump past navigation menus to next heading
@@ -77,7 +77,7 @@ mads src/browser.asm -o:bin/browser.xex -l:bin/browser.lab
 | `vbxe_init.asm` | VBXE initialization: XDL, font copy, blitter BCBs, palette (8 colors + gradient + 64 link colors) |
 | `vbxe_text.asm` | Text engine: putchar, print, cls, scroll, fill, VRAM read/write helpers |
 | `vbxe_gfx.asm` | Graphics: image VRAM alloc, pixel streaming, GMON XDL, fullscreen display, title gradient |
-| `fujinet.asm` | FujiNet N: device SIO layer (open, status, read, close) |
+| `fujinet.asm` | FujiNet N: device SIO layer (open, status, read, close), dual N1:/N2: support |
 | `http.asm` | HTTP GET workflow with optimized STATUS skipping, URL utilities |
 | `url.asm` | URL normalization, prefix handling, base URL extraction, relative URL resolution |
 | `html_parser.asm` | Streaming byte-by-byte HTML parser (6 states: text, tag, entity, attr name/value, comment) |
@@ -94,13 +94,14 @@ mads src/browser.asm -o:bin/browser.xex -l:bin/browser.lab
 
 ## Image Support
 
-Images on web pages appear as clickable `[N]IMG` links in blue. Clicking downloads the image through a server-side converter that resizes and converts to VBXE 256-color format (up to 320×192 pixels), then displays fullscreen. Press any key to return to the page. Direct image URLs (.png, .jpg, .gif) are also supported.
+Images on web pages appear as clickable `[N]IMG` links in blue. Clicking downloads the image through a server-side converter that resizes and converts to VBXE 256-color format (up to 320×192 pixels), then displays fullscreen. Press any key to return to the page. Image download uses FujiNet N2: device so the page connection (N1:) stays open — you can view images during page scrolling and continue browsing afterwards. Direct image URLs (.png, .jpg, .gif) are also supported.
 
 ## Architecture
 
 - **Code**: starts at $3000, critical MEMAC B routines stay below $4000
 - **VBXE VRAM**: screen buffer $0000, BCBs $1300, XDL $1400, font $2000, images/gradient $3000+
 - **MEMAC B window**: $4000–$7FFF maps to VBXE VRAM bank 0 when active
+- **FujiNet**: N1: for page download, N2: for image download (simultaneous connections)
 - **Interrupts**: Timer 1 IRQ (mouse sampling ~985 Hz) + VBI (deferred cursor update), both with MEMAC B shadow register for safe nesting
 - **Buffers**: $8800+ (URL buffer, RX buffer, history stack, link URL table, image queue)
 

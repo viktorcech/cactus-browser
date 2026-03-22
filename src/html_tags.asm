@@ -198,6 +198,8 @@
 
 ?ctitle lda #0
         sta in_title
+        ldx title_len
+        sta title_buf,x        ; null-terminate title
         rts
 ?cskip  lda #0
         sta zp_in_skip

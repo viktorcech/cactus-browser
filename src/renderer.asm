@@ -19,6 +19,7 @@
         sta zp_in_bold
         sta last_was_sp
         sta title_len
+        sta title_buf          ; null-terminate empty title
 
         lda #ATTR_NORMAL
         sta zp_cur_attr
@@ -232,7 +233,8 @@
         jsr mouse_hide_cursor
         lda #$FF
         sta zp_mouse_prev_x
-        jsr http_save_base
+        ; DON'T call http_save_base here — base_url was set
+        ; in http_navigate and must stay intact for subsequent images
         lda rpp_link_num
         jsr calc_link_addr
         ldy #2                 ; skip "I:"
@@ -247,12 +249,18 @@
         lda #0
         sta img_src_buf,x
 ?icpd   jsr img_fetch_single
-        ; Connection is now closed (img_fetch used it).
-        ; Abort rendering — page content stays on screen as-is.
-        lda #$FF
-        sta pending_link       ; no pending link
-        sec
-        rts
+        ; img_fetch used N2: for image, N1: still open with page.
+        ; rx_buffer was overwritten by image data — clear rx_len
+        ; so html_process_chunk stops iterating corrupted buffer.
+        lda #0
+        sta zp_rx_len
+        sta http_remain_lo     ; force fresh STATUS on N1:
+        sta http_remain_hi
+        ; Return to --More-- loop — page download continues
+        status_msg COL_YELLOW, m_more
+        lda #0
+        sta zp_mouse_btn
+        jmp ?wait
 
 ?normal_click
         ; Normal link — store pending and ABORT rendering (C=1)

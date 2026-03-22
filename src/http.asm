@@ -211,13 +211,14 @@ m_rderr dta c'Read err $'
 m_rderr_hex dta c'00',0
 m_rderr_code dta b(0)
 http_idle_cnt dta b(0)
-http_remain_lo dta b(0)
-http_remain_hi dta b(0)
 .endp
 
 ; Global so html_tags.asm can reset them at <body>
 http_bytes_lo dta b(0)
 http_bytes_hi dta b(0)
+; Global so render_page_pause can reset after img_fetch
+http_remain_lo dta b(0)
+http_remain_hi dta b(0)
 
 ; ----------------------------------------------------------------------------
 ; http_set_url - Copy URL string to url_buffer (A=lo, X=hi)

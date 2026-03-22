@@ -279,8 +279,9 @@ img_wr_bank    dta b(0)        ; MEMAC B bank number
         inx
 
         ; --- Remaining scanlines below image ---
-        ; Calculate: remaining = (total - border) - img_height
-        lda #SCR_ROWS * 8 - 24
+        ; Calculate: remaining = 240 - 24 (border) - img_height
+        ; Total screen = 240 scanlines always (8 OVOFF + 232 TMON)
+        lda #240 - 24
         sec
         sbc img_height
         beq ?no_text           ; image fills screen exactly

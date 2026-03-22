@@ -4,7 +4,7 @@
 
 ; Strings (stay in code segment)
 default_url    dta c'N:http://retro.hackaday.com/',0
-msg_welcome    dta c'VBXE Web Browser alpha49',0
+msg_welcome    dta c'VBXE Web Browser alpha50',0
 ; (title screen strings moved to title.asm)
 msg_author     dta c'w1k 2025-2026  github.com/viktorcech/vbxe-browser',0
 msg_no_vbxe    dta c'VBXE not detected!',0

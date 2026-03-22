@@ -4,6 +4,7 @@
 
 FN_DEVID       = $71
 FN_UNIT        = 1
+fn_cur_unit    dta FN_UNIT     ; current N: unit (1=page, 2=image)
 FN_CMD_OPEN    = 'O'
 FN_CMD_CLOSE   = 'C'
 FN_CMD_READ    = 'R'
@@ -26,7 +27,7 @@ RX_BUF_SIZE    = 256
 .proc fn_open
         lda #FN_DEVID
         sta DDEVIC
-        lda #FN_UNIT
+        lda fn_cur_unit
         sta DUNIT
         lda #FN_CMD_OPEN
         sta DCOMND
@@ -63,7 +64,7 @@ RX_BUF_SIZE    = 256
 .proc fn_status
         lda #FN_DEVID
         sta DDEVIC
-        lda #FN_UNIT
+        lda fn_cur_unit
         sta DUNIT
         lda #FN_CMD_STATUS
         sta DCOMND
@@ -134,7 +135,7 @@ RX_BUF_SIZE    = 256
 
 ?do     lda #FN_DEVID
         sta DDEVIC
-        lda #FN_UNIT
+        lda fn_cur_unit
         sta DUNIT
         lda #FN_CMD_READ
         sta DCOMND
@@ -166,7 +167,7 @@ RX_BUF_SIZE    = 256
 .proc fn_close
         lda #FN_DEVID
         sta DDEVIC
-        lda #FN_UNIT
+        lda fn_cur_unit
         sta DUNIT
         lda #FN_CMD_CLOSE
         sta DCOMND

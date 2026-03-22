@@ -11,8 +11,8 @@ img_timeout dta b(0)
 img_saved_key dta b($FF)     ; saved key from abort ($FF=none)
 img_fetch_idx dta b(0)       ; current image being fetched
 
-; Max retries before timeout (each retry ~100ms = ~150 retries = ~15 sec)
-IMG_MAX_RETRIES = 150
+; Max retries before timeout (each retry ~120ms = ~40 retries = ~5 sec)
+IMG_MAX_RETRIES = 40
 
 ; ----------------------------------------------------------------------------
 ; img_check_abort - Check if user pressed a key (non-blocking)
@@ -342,14 +342,15 @@ img_fn_err   dta b(0)
         ; Resolve relative URL and build vbxe.php converter URL
         jsr img_resolve_and_build_url
 
-        ; Close any previous connection
-        jsr fn_close
-        ; Delay between connections
-        wait_frames 30
+        ; Switch to N2: for image download (N1: stays open for page)
+        lda #2
+        sta fn_cur_unit
+        jsr fn_close           ; close N2: in case left open
+        wait_frames 10
 
         status_msg COL_YELLOW, m_step2
 
-        ; Open connection
+        ; Open connection on N2:
         jsr fn_open
         bcc ?open_ok
         jmp ?e_open
@@ -385,7 +386,11 @@ img_fn_err   dta b(0)
         jsr vbxe_img_begin_write
         jsr img_read_pixels
 
-        jsr fn_close
+        jsr fn_close           ; close N2:
+
+        ; Restore N1: as active unit
+        lda #FN_UNIT
+        sta fn_cur_unit
 
         ; Set VBXE palette AFTER pixels (keeps text colors during download)
         lda #<img_pal_buf
@@ -415,11 +420,16 @@ img_fn_err   dta b(0)
         jsr ui_status_done
         rts
 
-?e_open lda #<me_open
+?e_open ; Restore N1: on error
+        lda #FN_UNIT
+        sta fn_cur_unit
+        lda #<me_open
         ldx #>me_open
         jsr ui_show_error
         rts
-?e_hdr  jsr fn_close
+?e_hdr  jsr fn_close           ; close N2:
+        lda #FN_UNIT
+        sta fn_cur_unit
         ; Patch error code digit into message string
         lda img_err_code
         clc
@@ -450,11 +460,15 @@ img_fn_err   dta b(0)
         adc #'0'
         rts
 ?e_alloc jsr fn_close
+        lda #FN_UNIT
+        sta fn_cur_unit
         lda #<me_alloc
         ldx #>me_alloc
         jsr ui_show_error
         rts
 ?e_pal  jsr fn_close
+        lda #FN_UNIT
+        sta fn_cur_unit
         lda #<me_pal
         ldx #>me_pal
         jsr ui_show_error
