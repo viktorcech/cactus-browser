@@ -12,8 +12,8 @@ VBXE_VCTL      = $40   ; VIDEO_CONTROL (R/W)
 VBXE_CORE_VER  = $40   ; CORE_VERSION (R) - same offset, read = version
 
 VBXE_XDL_ADR0  = $41   ; XDL address low byte (W)
-VBXE_XDL_ADR1  = $42   ; XDL address mid byte (W)
-VBXE_XDL_ADR2  = $43   ; XDL address high byte (W)
+VBXE_XDL_ADR1  = $42   ; XDL address mid byte (W) — not used (INY from ADR0), kept for HW reference
+VBXE_XDL_ADR2  = $43   ; XDL address high byte (W) — not used (INY from ADR0), kept for HW reference
 
 VBXE_CSEL      = $44   ; Color Select (index 0-255)
 VBXE_PSEL      = $45   ; Palette Select (0=playfield, 1=overlay)
@@ -140,6 +140,8 @@ DVSTAT     = $02EA
 KEY_RETURN = $0C
 KEY_SPACE  = $21
 KEY_NONE   = $FF
+ATASCII_TAB = $7F              ; TAB key via CIO K: (ATASCII)
+ATASCII_RET = 155              ; Return via CIO K: (ATASCII)
 
 CH_SPACE   = $20
 
@@ -195,6 +197,9 @@ zp_vbi_saved   = $AF   ; VBI: saved shadow value
 ; Page buffer pointers ($B8-$BB, after mouse $B0-$B7)
 zp_pb_wr_ptr   = $B8   ; 2B write pointer (MEMAC B window $4000-$7FFF)
 zp_pb_rd_ptr   = $BA   ; 2B read pointer
+
+; TAB navigation ($BC)
+zp_tab_link    = $BC   ; currently selected link via TAB ($FF = none)
 
 ; ----------------------------------------------------------------------------
 ; Macros

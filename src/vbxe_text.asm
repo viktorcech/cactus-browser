@@ -220,6 +220,104 @@ vbxe_rw_val dta 0
 vbxe_rw_off dta 0
 
 ; ----------------------------------------------------------------------------
+; tab_find_next - Find next link on screen after current cursor position
+; Scans VRAM attrs for any link attr ($20-$5F) different from current link.
+; Wraps around to top once if no link found below current position.
+; MUST be below $4000 (uses MEMAC B directly)
+; Input: zp_tab_link = current link ($FF = none), zp_mouse_x/y = position
+; Output: C=0 found (zp_mouse_x/y set), C=1 no link found
+; ----------------------------------------------------------------------------
+.proc tab_find_next
+        ; Compute attr to skip (same link's continuation)
+        lda zp_tab_link
+        cmp #$FF
+        beq ?no_cur
+        clc
+        adc #ATTR_LINK_BASE    ; skip current link's attr
+        bne ?set_cur           ; always (result $20+)
+?no_cur lda #$FF               ; $FF won't match any link attr
+?set_cur sta ?skip_attr
+
+        memb_on 0
+
+        ; Start position: top-left if no selection, else next col
+        lda zp_tab_link
+        cmp #$FF
+        bne ?from_cur
+        ldx #CONTENT_TOP
+        ldy #1                 ; first attr byte
+        lda #0
+        beq ?set_wrap          ; always
+?from_cur
+        ldx zp_mouse_y
+        lda zp_mouse_x
+        asl
+        clc
+        adc #3                 ; next column's attr offset
+        tay
+        cpy #SCR_STRIDE
+        bcc ?ok_col
+        ldy #1                 ; wrap to next row
+        inx
+        cpx #CONTENT_BOT+1
+        bcc ?ok_col
+        ldx #CONTENT_TOP       ; wrap to top
+?ok_col lda #0
+?set_wrap
+        sta ?did_wrap
+
+?scan_row
+        lda row_addr_lo,x
+        sta zp_scr_ptr
+        lda row_addr_hi,x
+        sta zp_scr_ptr+1
+
+?col    lda (zp_scr_ptr),y
+        cmp #ATTR_LINK_BASE
+        bcc ?next
+        cmp #ATTR_LINK_BASE+MAX_LINKS
+        bcs ?next
+        cmp ?skip_attr         ; skip same link's text
+        beq ?next
+        jmp ?found
+
+?next   iny
+        iny
+        cpy #SCR_STRIDE
+        bcc ?col
+
+        ldy #1
+        inx
+        cpx #CONTENT_BOT+1
+        bcc ?scan_row
+
+        ; Bottom reached — wrap to top (once only)
+        lda ?did_wrap
+        bne ?none
+        lda #1
+        sta ?did_wrap
+        ldx #CONTENT_TOP
+        jmp ?scan_row
+
+?none   memb_off
+        sec
+        rts
+
+?found  ; X = row, Y = attr offset; col = (Y-1) / 2
+        stx zp_mouse_y
+        dey
+        tya
+        lsr
+        sta zp_mouse_x
+        memb_off
+        clc
+        rts
+
+?skip_attr dta 0
+?did_wrap  dta 0
+.endp
+
+; ----------------------------------------------------------------------------
 ; vbxe_restore_xdl - Restore normal 30-row text XDL
 ; MUST be below $4000 (uses MEMAC B)
 ; Called from ui_init (above $4000) to switch from title/image XDL

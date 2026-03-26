@@ -8,7 +8,7 @@ mkdir -p bin
 
 # Generate build timestamp
 STAMP=$(date +"%d.%m.%Y %H:%M")
-MSG="VBXE Browser a54 $STAMP"
+MSG="VBXE Browser b01 $STAMP"
 LEN=${#MSG}
 COL=$(( (80 - LEN) / 2 ))
 

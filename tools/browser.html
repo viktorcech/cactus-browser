@@ -1,0 +1,207 @@
+<html>
+<head><title>VBXE Web Browser - Home</title></head>
+<body>
+
+<h1>VBXE Web Browser</h1>
+
+<p>Welcome! You are browsing the web on a real <b>Atari XL/XE</b> computer
+with a <b>VBXE</b> video expansion and <b>FujiNet</b> network adapter.</p>
+
+<p>This is an 8-bit web browser written in 6502 assembly language.
+It renders HTML pages in 80-column text mode using the VBXE overlay.</p>
+
+<hr>
+
+<h2>Features</h2>
+
+<ul>
+<li><b>80-column text</b> - VBXE text overlay mode (TMON)</li>
+<li><b>Color rendering</b> - headings, links, bold text in color</li>
+<li><b>Image viewing</b> - fullscreen 256-color images via VBXE graphics overlay</li>
+<li><b>Mouse support</b> - ST mouse for clicking links</li>
+<li><b>Word wrapping</b> - automatic line breaking at 80 columns</li>
+<li><b>HTML tags</b> - headings, paragraphs, links, lists, tables, bold, italic, HR</li>
+<li><b>Page buffering</b> - entire page downloaded to VRAM before rendering</li>
+<li><b>Link navigation</b> - click links or use keyboard</li>
+</ul>
+
+<hr>
+
+<h2>Controls</h2>
+
+<h3>Navigation</h3>
+<ul>
+<li><b>U</b> - enter a new URL</li>
+<li><b>B</b> - go back to previous page</li>
+<li><b>Q</b> - quit current page (return to start screen)</li>
+</ul>
+
+<h3>Page scrolling</h3>
+<ul>
+<li><b>Space</b> or <b>Return</b> - scroll to next page</li>
+<li><b>H</b> - skip to next heading (useful for skipping navigation menus)</li>
+<li><b>Click on --More--</b> bar - same as Space</li>
+</ul>
+
+<h3>Links and images</h3>
+<ul>
+<li><b>Click on a link</b> - follow the link</li>
+<li><b>Click on [IMG]</b> - download and show image fullscreen</li>
+<li>Press <b>any key</b> to close image and return to page</li>
+</ul>
+
+<hr>
+
+<h2>Requirements</h2>
+
+<ul>
+<li><b>Atari XL/XE</b> - 64KB RAM</li>
+<li><b>VBXE</b> - Video Board XE (FX core 1.x)</li>
+<li><b>FujiNet</b> - WiFi network adapter</li>
+<li><b>ST Mouse</b> - Atari ST mouse in port 2</li>
+</ul>
+
+<hr>
+
+<h2>Technical details</h2>
+
+<p>The browser is written entirely in <b>6502 assembly</b> using the
+<b>MADS</b> (Mad Assembler) assembler. It uses approximately 10 KB of code.</p>
+
+<ul>
+<li><b>Display</b> - VBXE XDL with TMON overlay, 80x29 characters</li>
+<li><b>Network</b> - FujiNet N: device via SIO ($71)</li>
+<li><b>Images</b> - server-side conversion to 320x184, 256-color indexed format</li>
+<li><b>Page buffer</b> - HTML stored in VRAM ($14000+) for offline rendering</li>
+<li><b>Palette</b> - 8 text colors + 64 blue shades for link detection</li>
+</ul>
+
+<hr>
+
+<h2>Supported HTML tags</h2>
+
+<h3>Headings (h1-h6)</h3>
+
+<p>The browser supports all six heading levels with distinct colors:</p>
+
+<h1>Heading 1 - yellow</h1>
+<h2>Heading 2 - orange</h2>
+<h3>Heading 3 - green</h3>
+<h4>Heading 4 - cyan</h4>
+<h5>Heading 5 - light gray</h5>
+<h6>Heading 6 - light gray</h6>
+
+<h3>Text formatting</h3>
+
+<p>Normal text, <b>bold text</b>, <i>italic text</i>, <u>underlined text</u>,
+<code>inline code</code>, H<sub>2</sub>O (subscript), E=mc<sup>2</sup> (superscript).</p>
+
+<p>Water formula: H<sub>2</sub>O. Einstein: E=mc<sup>2</sup>. Footnote reference<sup>1</sup>.</p>
+
+<h3>Lists</h3>
+
+<p>Unordered list:</p>
+<ul>
+<li>First item</li>
+<li>Second item with <b>bold</b> and <a href="http://fujinet.online/">a link</a></li>
+<li>Third item</li>
+</ul>
+
+<p>Ordered list:</p>
+<ol>
+<li>Step one</li>
+<li>Step two</li>
+<li>Step three</li>
+</ol>
+
+<h3>Blockquote</h3>
+
+<blockquote>This is a blockquote. It should be indented from the left margin.
+Perfect for displaying quotes or important notes.</blockquote>
+
+<h3>Definition list</h3>
+
+<dt>VBXE</dt>
+<dd>Video Board XE - FPGA video expansion for Atari 8-bit computers</dd>
+
+<dt>FujiNet</dt>
+<dd>WiFi network adapter for Atari and other retro computers</dd>
+
+<h3>Preformatted text</h3>
+
+<pre>
+  ___  _            _
+ / _ \| |_ __ _ _ _(_)
+| (_) |  _/ _` | '_| |
+ \___/ \__\__,_|_| |_|
+</pre>
+
+<h3>Tables</h3>
+
+<table>
+<tr><th>Feature</th><th>Status</th></tr>
+<tr><td>Headings h1-h6</td><td>Yes</td></tr>
+<tr><td>Bold, italic</td><td>Yes</td></tr>
+<tr><td>Underline</td><td>Yes</td></tr>
+<tr><td>Sup/sub</td><td>Yes</td></tr>
+<tr><td>Links</td><td>Yes</td></tr>
+<tr><td>Images</td><td>Yes</td></tr>
+<tr><td>Lists</td><td>Yes</td></tr>
+<tr><td>Tables</td><td>Basic</td></tr>
+</table>
+
+<h3>Horizontal rules</h3>
+
+<p>A horizontal rule separates sections:</p>
+<hr>
+<p>Content continues after the rule.</p>
+
+<hr>
+
+<h2>HTML5 semantic tags</h2>
+
+<p>The browser also supports HTML5 semantic elements. They behave like
+div containers with automatic line breaks:</p>
+
+<nav>
+<b>Navigation:</b> <a href="http://retro.hackaday.com/">Retro Hackaday</a> |
+<a href="http://www.atariportal.cz/">Atari Portal</a> |
+<a href="http://fujinet.online/">FujiNet</a>
+</nav>
+
+<article>
+<h4>Sample article</h4>
+<p>This is an article element. It represents a self-contained composition
+in a page, such as a blog post or news story.</p>
+</article>
+
+<section>
+<h4>Sample section</h4>
+<p>This is a section element. It represents a thematic grouping of content.</p>
+</section>
+
+<aside>
+<b>Aside:</b> This is a sidebar note. In a real browser it would float to
+the side, but on our 80-column display it shows as a block.
+</aside>
+
+<hr>
+
+<h2>Links</h2>
+
+<ul>
+<li><a href="http://retro.hackaday.com/">Retro Hackaday</a> - retro computing news</li>
+<li><a href="http://www.atariportal.cz/">Atari Portal CZ</a> - Czech Atari community</li>
+<li><a href="http://fujinet.online/">FujiNet Online</a> - FujiNet project homepage</li>
+<li><a href="http://lotharek.pl/">Lotharek</a> - VBXE and Atari hardware</li>
+</ul>
+
+<hr>
+
+<footer>
+<p>VBXE Web Browser by <b>w1k</b> (2025-2026)</p>
+<p>Source code: <a href="http://github.com/viktorcech/vbxe-browser">github.com/viktorcech/vbxe-browser</a></p>
+</footer>
+
+</body>
+</html>

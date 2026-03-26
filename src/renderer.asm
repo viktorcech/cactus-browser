@@ -20,19 +20,18 @@
         sta last_was_sp
         sta title_len
         sta title_buf          ; null-terminate empty title
-
-        lda #ATTR_NORMAL
-        sta zp_cur_attr
-
-        lda #0
         sta zp_scroll_pos
         sta zp_scroll_pos+1
         sta zp_page_lines
         sta zp_page_lines+1
         sta page_abort
         sta skip_to_heading
+
+        lda #ATTR_NORMAL
+        sta zp_cur_attr
         lda #$FF
         sta pending_link
+        sta zp_tab_link
         rts
 .endp
 
@@ -168,6 +167,8 @@
         sta zp_render_row
         lda #0
         sta zp_link_num        ; reset links for new screen
+        lda #$FF
+        sta zp_tab_link        ; clear TAB selection on scroll
 
         inc zp_page_lines
         bne ?ok
@@ -355,8 +356,10 @@
         jsr kbd_get
         cmp #CH_SPACE
         beq ?key_next
-        cmp #155               ; ATASCII Return
-        beq ?key_next
+        cmp #ATASCII_TAB
+        beq ?key_tab
+        cmp #ATASCII_RET
+        beq ?key_return
         cmp #'h'
         beq ?key_heading
         cmp #'H'
@@ -366,6 +369,19 @@
         cmp #'Q'
         beq ?key_quit
         jmp ?wait
+
+?key_tab
+        jsr tab_next_link
+        jmp ?wait
+
+?key_return
+        lda zp_tab_link
+        cmp #$FF
+        beq ?key_next          ; no TAB selection → advance page
+        sta pending_link
+        jsr mouse_hide_cursor
+        sec
+        rts
 
 ?key_next
         ; Keyboard: hide cursor first, then advance
@@ -396,13 +412,16 @@ m_more    dta c' -- Next page: Spc  Skip: H  Quit: Q --',0
 m_img_queued dta c' IMG queued after download',0
 m_skipping dta c' Skipping to heading...',0
 m_loading dta c' Loading...',0
-rpp_link_num    dta 0
-rpp_saved_cidx  dta 0
-rpp_saved_rxlen dta 0
-rpp_saved_attr  dta 0
-rpp_saved_quotes dta 0
-rpp_saved_closing dta 0
-rpp_state_buf   .ds 15             ; save $84-$92 (cur_attr through entity_idx)
+; --- Parser state save area for img_fetch during --More-- ---
+; img_fetch_single clobbers ZP, rx_buffer, and status_msg overwrites attr.
+; After image view, VRAM is rewound and chunk re-read, parser resumes exactly.
+rpp_link_num    dta 0              ; link number of clicked IMG link
+rpp_saved_cidx  dta 0              ; saved chunk_idx (parser position in rx_buffer)
+rpp_saved_rxlen dta 0              ; saved zp_rx_len (chunk size for re-read)
+rpp_saved_attr  dta 0              ; saved zp_cur_attr (status_msg clobbers it)
+rpp_saved_quotes dta 0             ; saved in_quotes (parser mid-attribute state)
+rpp_saved_closing dta 0            ; saved is_closing (parser mid-tag state)
+rpp_state_buf   .ds 15             ; bulk save: ZP $84-$92 (cur_attr..entity_idx)
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -510,12 +529,12 @@ render_set_attr = vbxe_setattr
 ; render_tbl_line = render_hr_line (identical code)
 render_tbl_line = render_hr_line
 
-; Renderer state
-last_was_sp dta 0
-title_len   dta 0
-page_abort  dta 0
-pending_link dta $FF           ; $FF = none, 0-31 = link number to follow
-skip_to_heading dta 0          ; 1 = skip rendering until next heading
+; --- Renderer state ---
+last_was_sp dta 0              ; suppress duplicate spaces in word wrap
+title_len   dta 0              ; chars collected in title_buf so far
+page_abort  dta 0              ; 1 = user pressed Q, stop rendering
+pending_link dta $FF           ; $FF = none, 0-63 = link number to follow after render
+skip_to_heading dta 0          ; 1 = H key pressed, suppress output until next <hN>
 
 WORD_BUF_SZ = 80
 word_buf    .ds WORD_BUF_SZ

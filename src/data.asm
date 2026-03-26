@@ -9,8 +9,9 @@ msg_author     dta c'w1k 2025-2026  github.com/viktorcech/vbxe-browser',0
 msg_no_vbxe    dta c'VBXE not detected!',0
 
 ; ============================================================================
-; Large buffers at $8800 (above code, below OS ROM)
-; This avoids conflict with MEMAC B window ($4000-$7FFF)
+; Large buffers at $8800
+; Memory map: code $2000-$2B00, MEMAC B window $4000-$7FFF (VRAM access),
+; buffers $8800+, OS ROM $C000+. Buffers here are safe from MEMAC B corruption.
 ; ============================================================================
         org $8800
 

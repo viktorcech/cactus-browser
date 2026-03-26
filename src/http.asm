@@ -40,7 +40,7 @@
 ?st_ok
         lda zp_fn_error
         beq ?no_err
-        cmp #136
+        cmp #136               ; 136 ($88) = EOF (FujiNet convention: server closed)
         beq ?jdone
         bmi ?jrd_err
         jmp ?no_err
@@ -209,23 +209,31 @@ m_rderr_code dta b(0)
 http_idle_cnt dta b(0)
 .endp
 
-; Global so html_tags.asm can reset them at <body>
+; --- Global download state ---
+; Total bytes transferred (for progress display, reset at <body>)
 http_bytes_lo dta b(0)
 http_bytes_hi dta b(0)
-; Used internally by http_download
+; Remaining bytes from last STATUS call (skip redundant STATUS when >0)
 http_remain_lo dta b(0)
 http_remain_hi dta b(0)
-; Download active flag (1=N1: open for page download, 0=closed)
-; MUST be below $4000 — MEMAC B safe
+; Download active flag: 1=N1: open for page download, 0=closed
+; Guards img_fetch_single from using N1: while page downloads
+; MUST be below $4000 — MEMAC B corrupts $4000-$7FFF during VRAM ops
 dl_active   dta b(0)
-; Deferred image fetch (1=user clicked IMG during download, fetch after close)
-; MUST be below $4000 — MEMAC B safe
+; Deferred image fetch: 1=user clicked IMG link during active download
+; After http_download closes N1:, checks this flag and calls img_fetch_single
+; MUST be below $4000 — same MEMAC B reason as dl_active
 img_deferred dta b(0)
 
 ; ----------------------------------------------------------------------------
 ; http_render - Render HTML from VRAM page buffer (Phase 2)
-; Input: pb_total set by http_download
-; No network connection needed - reads from VRAM
+; Two-phase architecture:
+;   Phase 1 (http_download): network → rx_buffer → VRAM page buffer
+;   Phase 2 (http_render):   VRAM page buffer → rx_buffer → html parser
+; N1: is closed during Phase 2 — free for image fetches via img_fetch_single
+; Input: pb_total set by http_download (24-bit byte count in VRAM)
+; Reads 255-byte chunks from VRAM, feeds to html_process_chunk
+; Saves VRAM read position before each chunk for rewind after img_fetch
 ; ----------------------------------------------------------------------------
 .proc http_render
         jsr vbxe_pb_init_read
@@ -293,9 +301,9 @@ img_deferred dta b(0)
 
 ?done   jmp html_flush
 
-pb_chunk_size    dta b(0)
-pb_rd_save_bank  dta b(0)
-pb_rd_save_lo    dta b(0)
+pb_chunk_size    dta b(0)       ; bytes in current chunk (for 24-bit read counter)
+pb_rd_save_bank  dta b(0)       ; VRAM read state saved before each chunk
+pb_rd_save_lo    dta b(0)       ; (allows rewind after img_fetch destroys rx_buffer)
 pb_rd_save_hi    dta b(0)
 .endp
 

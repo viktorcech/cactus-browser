@@ -101,6 +101,16 @@
         ldx #>tw_ctrl4
         jsr vbxe_print
 
+        ; === Search hint (row 17) ===
+        lda #17
+        ldx #6
+        jsr vbxe_setpos
+        lda #ATTR_DECOR
+        jsr vbxe_setattr
+        lda #<tw_search
+        ldx #>tw_search
+        jsr vbxe_print
+
         ; === Separator (row 18) ===
         lda #18
         ldx #0
@@ -165,6 +175,7 @@ tw_ctrl1    dta c'U - Enter URL              B - Back',0
 tw_ctrl2    dta c'H - Skip to heading        Q - Quit page',0
 tw_ctrl3    dta c'Space/Return - Next page   Click - follow link',0
 tw_ctrl4    dta c'P - Toggle proxy (fast)    IMG links: click to view',0
+tw_search   dta c'Type any words to search (e.g. ATARI 800XL)',0
 tw_press_u  dta c'Press U to start browsing.',0
 tw_pon      dta c'Proxy: ON  (P to toggle)',0
 tw_poff     dta c'Proxy: OFF (P to toggle)',0

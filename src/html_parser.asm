@@ -92,8 +92,8 @@ ENTITY_BUF_SZ  = 8
 ; html_process_chunk - main parser loop
 ; Split into small sub-procs to avoid branch-out-of-range
 ; ============================================================================
-chunk_idx  dta 0
-in_quotes  dta 0
+chunk_idx  dta 0              ; current position in rx_buffer (0..zp_rx_len-1)
+in_quotes  dta 0              ; inside quoted attr value: holds quote char (" or ')
 
 .proc html_process_chunk
         lda #0
@@ -142,7 +142,8 @@ parse_chunk_done
         cmp #'&'
         beq ?start_ent
 
-        ; UTF-8 filtering: skip multi-byte sequences
+        ; UTF-8 filtering: Atari has no UTF-8 font, skip all non-ASCII bytes
+        ; 2-byte ($C0-$DF lead + 1 cont), 3-byte ($E0-$EF + 2), 4-byte ($F0+)
         ldx utf8_skip
         bne ?utf8_cont
         cmp #$C0               ; 2-byte UTF-8 lead (C0-DF)?
@@ -388,7 +389,7 @@ parse_chunk_done
         jmp parse_loop_re
 .endp
 
-comment_dashes dta 0
+comment_dashes dta 0          ; consecutive '-' count before '>' (need 2+ for -->)
 
 ; --- Entity ---
 .proc parse_entity
@@ -486,13 +487,13 @@ comment_dashes dta 0
 ?ok     rts
 .endp
 
-; State variables
-is_closing     dta 0
-in_title       dta 0
-in_pre         dta 0          ; 1 = inside <pre>, preserve newlines
-utf8_skip      dta 0          ; bytes remaining to skip in UTF-8 sequence
-td_count       dta 0          ; table cell count in current row
-zp_in_head     dta 0          ; 1 = inside <head>, skip content except <title>
+; --- Parser state variables ---
+is_closing     dta 0          ; 1 = closing tag (</...>), set when '/' seen at tag start
+in_title       dta 0          ; 1 = inside <title>: chars go to title_buf via render_char
+in_pre         dta 0          ; 1 = inside <pre>: bypass word wrap, only LF=newline, CR skipped
+utf8_skip      dta 0          ; bytes to skip in multi-byte UTF-8 (no UTF-8 font on Atari)
+td_count       dta 0          ; table cell counter per <tr> row (reset at open_tr)
+zp_in_head     dta 0          ; 1 = inside <head>: skip all content except <title>
 
 ; Buffers
 tag_name_buf   .ds TAG_BUF_SIZE

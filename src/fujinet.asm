@@ -57,6 +57,8 @@ RX_BUF_SIZE    = 256
 
 ; ----------------------------------------------------------------------------
 ; fn_status - Get FujiNet status (bytes waiting, connected, error)
+; Reads 4-byte DVSTAT: [0]=bytes_lo, [1]=bytes_hi, [2]=connected, [3]=error
+; Error codes: 0=ok, 136($88)=EOF/closed, other=fatal
 ; Output: zp_fn_bytes_lo/hi, zp_fn_connected, zp_fn_error, C=0/1
 ; ----------------------------------------------------------------------------
 .proc fn_status
@@ -102,7 +104,9 @@ RX_BUF_SIZE    = 256
 
 ; ----------------------------------------------------------------------------
 ; fn_read - Read data from FujiNet into rx_buffer
-; Uses zp_fn_bytes_lo/hi from fn_status
+; Uses zp_fn_bytes_lo/hi from fn_status, caps at 255 (8-bit zp_rx_len)
+; Reading 256 would set zp_rx_len=0 (overflow!) — always read max 255
+; DAUX1/DAUX2 must match DBYTLO/DBYTHI (FujiNet requirement)
 ; Output: zp_rx_len = bytes read, C=0/1
 ; ----------------------------------------------------------------------------
 .proc fn_read

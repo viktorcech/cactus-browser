@@ -73,10 +73,10 @@ kdev_name dta c'K:',$9B
         ldy #0
         sty kgl_len
 
-?loop   ; Show cursor
+?loop   ; Show cursor (putchar advances; cursor_back undoes the advance)
         lda #'_'
         jsr vbxe_putchar
-        dec zp_cursor_col
+        jsr cursor_back
 
         jsr kbd_get
 
@@ -116,11 +116,11 @@ kdev_name dta c'K:',$9B
         ; Erase cursor + last char
         lda #ATASCII_SP
         jsr vbxe_putchar
-        dec zp_cursor_col
-        dec zp_cursor_col
+        jsr cursor_back
+        jsr cursor_back
         lda #ATASCII_SP
         jsr vbxe_putchar
-        dec zp_cursor_col
+        jsr cursor_back
         jmp ?loop
 
 ?confirm
@@ -140,4 +140,19 @@ kdev_name dta c'K:',$9B
 
 kgl_max dta 0
 kgl_len dta 0
+.endp
+
+; ----------------------------------------------------------------------------
+; cursor_back - Move cursor back one position (handles line wrap)
+; When col=0, wraps to col=SCR_COLS-1 on previous row
+; ----------------------------------------------------------------------------
+.proc cursor_back
+        lda zp_cursor_col
+        bne ?dec
+        lda #SCR_COLS-1
+        sta zp_cursor_col
+        dec zp_cursor_row
+        rts
+?dec    dec zp_cursor_col
+        rts
 .endp

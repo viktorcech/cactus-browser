@@ -556,3 +556,51 @@ use_proxy  dta b(0)           ; 0=direct, 1=proxy
 .endp
 
 proxy_prefix dta c'N:https://turiecfoto.sk/proxy.php?url=',0
+
+; ----------------------------------------------------------------------------
+; url_build_search - Convert search query in url_buffer to search URL
+; Input: url_buffer = "search terms", url_length = length
+; Output: url_buffer = "turiecfoto.sk/search.php?q=search+terms"
+; Note: http_ensure_prefix will add "N:http://" later
+; ----------------------------------------------------------------------------
+.proc url_build_search
+        ; Copy query from url_buffer to rx_buffer (temp)
+        ldy #0
+?cp1    lda url_buffer,y
+        sta rx_buffer,y
+        beq ?cp1d
+        iny
+        cpy #200
+        bne ?cp1
+        lda #0
+        sta rx_buffer,y
+?cp1d
+        ; Copy search prefix to url_buffer
+        ldy #0
+?pfx    lda search_prefix,y
+        beq ?pfxd
+        sta url_buffer,y
+        iny
+        bne ?pfx
+?pfxd   ; Y = length of prefix
+        ; Append query from rx_buffer, encoding spaces as '+'
+        ldx #0
+?cp2    lda rx_buffer,x
+        beq ?done
+        cmp #' '
+        bne ?nosp
+        lda #'+'
+?nosp   sta url_buffer,y
+        iny
+        inx
+        cpy #URL_BUF_SIZE-1
+        bne ?cp2
+?done   lda #0
+        sta url_buffer,y
+        sty url_length
+        lda #0
+        sta url_length+1
+        rts
+.endp
+
+search_prefix dta c'turiecfoto.sk/search.php?q=',0

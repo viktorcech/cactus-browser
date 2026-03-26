@@ -12,7 +12,7 @@
 
 MOUSE_PORT2 = 1               ; 0=port 1, 1=port 2
 
-STRIG0     = $D010
+STRIG0     = $D010             ; used when MOUSE_PORT2=0
 STRIG1     = $D011
 SETVBV     = $E45C
 XITVBV     = $E462
@@ -384,6 +384,8 @@ mouse_old_y     dta 0          ; old Y bits, pre-shifted <<2
         cmp zp_mouse_y
         beq ?done
 ?moved
+        lda #$FF
+        sta zp_tab_link        ; mouse movement clears TAB selection
         ; Skip restore if prev_x=$FF (invalid — screen was redrawn)
         lda zp_mouse_prev_x
         cmp #$FF

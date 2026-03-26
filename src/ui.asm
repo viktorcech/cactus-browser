@@ -86,7 +86,26 @@ m_urlp  dta c'URL: ',0
         beq ?proxy
         cmp #'P'
         beq ?proxy
+        cmp #ATASCII_TAB
+        beq ?tab
+        cmp #ATASCII_RET
+        beq ?ret_key
         jmp ?loop
+
+?tab    jsr tab_next_link
+        jmp ?loop
+
+?ret_key
+        lda zp_tab_link
+        cmp #$FF
+        beq ?rl
+        sta zp_cur_link
+        lda #KEY_NONE
+        sta CH
+        jsr mouse_hide_cursor
+        jsr ui_follow_link
+        jsr ?chk_pending
+?rl     jmp ?loop
 
         ; Q = return to welcome screen
 ?quit   jsr mouse_hide_cursor
@@ -193,6 +212,17 @@ m_urlp  dta c'URL: ',0
 ?lon    iny
         bne ?low
 ?lowd
+        ; Check if input is a URL (has '.') or search query (no '.')
+        ldy #0
+?chkdot lda url_buffer,y
+        beq ?nosrch            ; end of string, no dot = search
+        cmp #'.'
+        beq ?isurl             ; has dot = URL
+        iny
+        bne ?chkdot
+?nosrch ; No dot found - treat as search query
+        jsr url_build_search
+?isurl
         jsr ui_show_url
         clc
         rts
@@ -293,6 +323,71 @@ m_badlnk dta c'Invalid link number',0
         iny
         bne ?chk
 ?show_full
+        ; Check if URL starts with search prefix — show "Search: query" instead
+        ldy #0
+?chks   lda search_prefix,y
+        beq ?show_search           ; full match = search URL
+        cmp url_buffer,y
+        bne ?chks2                 ; mismatch at url_buffer level
+        iny
+        bne ?chks
+?chks2  ; Also check after "N:http://" (9 chars) since ensure_prefix adds it
+        ldy #0
+?chks3  lda search_prefix,y
+        beq ?show_search9
+        cmp url_buffer+9,y
+        bne ?not_search
+        iny
+        bne ?chks3
+?show_search9
+        tya
+        clc
+        adc #9                     ; skip "N:http://" + prefix
+        tay
+        jmp ?do_search
+?show_search
+        ; Y = length of search prefix
+?do_search
+        ; Print "Search: " then query (decode + back from url_buffer+Y)
+        ; Save Y before vbxe_print (it clobbers Y)
+        sty zp_tmp1
+        lda #<m_search
+        ldx #>m_search
+        jsr vbxe_print
+        ; Print query from url_buffer+Y, converting '+' back to spaces
+        lda zp_tmp1
+        clc
+        adc #<url_buffer
+        sta zp_tmp_ptr
+        lda #0
+        adc #>url_buffer
+        sta zp_tmp_ptr+1
+        ldy #0
+?sq     lda (zp_tmp_ptr),y
+        beq ?sqd
+        cmp #'+'
+        bne ?sqn
+        lda #' '
+?sqn    sty zp_tmp1                ; save Y (vbxe_putchar clobbers it)
+        jsr vbxe_putchar
+        ldy zp_tmp1                ; restore Y
+        iny
+        cpy #68                    ; max display width
+        bne ?sq
+?sqd    rts
+
+?not_search
+        ; Skip "N:" prefix if present
+        lda url_buffer
+        cmp #'N'
+        bne ?ns_full
+        lda url_buffer+1
+        cmp #':'
+        bne ?ns_full
+        lda #<(url_buffer+2)
+        ldx #>(url_buffer+2)
+        jmp vbxe_print
+?ns_full
         lda #<url_buffer
         ldx #>url_buffer
         jmp vbxe_print
@@ -307,6 +402,8 @@ m_badlnk dta c'Invalid link number',0
         tax
         pla
         jmp vbxe_print
+
+m_search dta c'Search: ',0
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -510,6 +607,22 @@ m_end   dta c' -- End -- Q:Quit U:URL B:Back',0
         lda #STATUS_ROW
         ldx #COL_RED
         jmp vbxe_fill_row
+.endp
+
+; ----------------------------------------------------------------------------
+; tab_next_link - Cycle to next link via TAB key
+; ----------------------------------------------------------------------------
+.proc tab_next_link
+        jsr mouse_hide_cursor
+        jsr tab_find_next      ; scan VRAM for next link attr
+        bcs ?none              ; no link found
+        jsr mouse_show_cursor
+        ; Extract link number from saved attr (set by mouse_invert_char)
+        lda mouse_saved_attr
+        sec
+        sbc #ATTR_LINK_BASE
+        sta zp_tab_link
+?none   rts
 .endp
 
 ; ----------------------------------------------------------------------------

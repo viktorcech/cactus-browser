@@ -4,26 +4,24 @@
 ; Images shown fullscreen one at a time after page loads
 ; ============================================================================
 
-img_hdr_w   dta a(0)
-img_hdr_h   dta b(0)
-img_pal_cnt dta a(0)
-img_timeout dta b(0)
-img_pal_leftover dta b(0)  ; leftover pixel bytes after palette read
-img_saved_key dta b($FF)     ; saved key from abort ($FF=none)
+img_hdr_w   dta a(0)           ; image width (16-bit LE, 8-320)
+img_hdr_h   dta b(0)           ; image height (8-bit, 8-192)
+img_pal_cnt dta a(0)           ; palette bytes read so far (16-bit, target=768)
+img_timeout dta b(0)           ; idle retries left before giving up
+img_pal_leftover dta b(0)      ; pixel bytes after 768th palette byte in same chunk
 
 ; Max retries before timeout (each retry ~120ms = ~40 retries = ~5 sec)
 IMG_MAX_RETRIES = 40
 
 ; ----------------------------------------------------------------------------
-; img_check_abort - Check if user pressed a key (non-blocking)
+; img_check_abort - Non-blocking key check during image download
+; Allows user to cancel long image transfers by pressing any key
 ; Output: C=1 if key pressed (abort), C=0 continue
 ; ----------------------------------------------------------------------------
 .proc img_check_abort
         lda CH
         cmp #KEY_NONE
         beq ?no
-        ; Save key for later replay, then clear CH
-        sta img_saved_key
         lda #KEY_NONE
         sta CH
         sec
@@ -33,8 +31,12 @@ IMG_MAX_RETRIES = 40
 .endp
 
 ; ----------------------------------------------------------------------------
-; img_read_header - Read 3-byte image header
-; Output: img_hdr_w, img_hdr_h set, C=0 ok
+; img_read_header - Read 3-byte image header from converter
+; Format: [width_lo] [width_hi] [height]
+; Validates: width 8-320, height 8-192 (rejects corrupt/empty streams)
+; Error codes: 1=abort, 2=SIO, 3=EOF, 4=fatal, 5=disconnect, 6=timeout,
+;              7=SIO read, 8=sanity check
+; Output: img_hdr_w, img_hdr_h set, C=0 ok, C=1 error
 ; ----------------------------------------------------------------------------
 .proc img_read_header
         lda #IMG_MAX_RETRIES
@@ -94,7 +96,7 @@ IMG_MAX_RETRIES = 40
 ?chk_h  lda img_hdr_h
         cmp #8
         bcc ?e_san
-        cmp #193
+        cmp #209
         bcs ?e_san
         clc
         rts
@@ -121,11 +123,12 @@ IMG_MAX_RETRIES = 40
 
 img_err_code dta b(0)
 img_fn_err   dta b(0)
-img_pix_cnt  dta b(0),b(0),b(0)  ; 24-bit pixel byte counter
 
 ; ----------------------------------------------------------------------------
-; img_read_palette - Read 768 bytes of palette data
-; Output: img_pal_buf filled, C=0 ok
+; img_read_palette - Read 768 bytes (256 colors * 3 RGB) into img_pal_buf
+; Palette may end mid-chunk — leftover bytes are pixel data, saved in
+; img_pal_leftover for img_fetch_single to flush to VRAM
+; Output: img_pal_buf filled, img_pal_leftover set, C=0 ok
 ; ----------------------------------------------------------------------------
 .proc img_read_palette
         lda #<img_pal_buf
@@ -219,8 +222,10 @@ img_pix_cnt  dta b(0),b(0),b(0)  ; 24-bit pixel byte counter
 .endp
 
 ; ----------------------------------------------------------------------------
-; img_read_pixels - Stream pixel data into VBXE VRAM
-; Output: C=0 ok
+; img_read_pixels - Stream pixel data into VBXE VRAM via MEMAC B
+; Reads chunks from FujiNet, writes each to VRAM via vbxe_img_write_chunk
+; Stops on: EOF (error 136), disconnect, timeout, user abort, or read error
+; Output: C=0 ok (image complete or partial), C=1 error
 ; ----------------------------------------------------------------------------
 .proc img_read_pixels
         lda #IMG_MAX_RETRIES
@@ -258,16 +263,7 @@ img_pix_cnt  dta b(0),b(0),b(0)  ; 24-bit pixel byte counter
         sta img_timeout
 
         jsr vbxe_img_write_chunk
-        ; Count bytes received
-        clc
-        lda img_pix_cnt
-        adc zp_rx_len
-        sta img_pix_cnt
-        bcc ?nc_cnt
-        inc img_pix_cnt+1
-        bne ?nc_cnt
-        inc img_pix_cnt+2
-?nc_cnt jmp ?lp
+        jmp ?lp
 
 ?no_data
         lda zp_fn_connected
@@ -286,7 +282,11 @@ img_pix_cnt  dta b(0),b(0),b(0)  ; 24-bit pixel byte counter
 .endp
 
 ; ----------------------------------------------------------------------------
-; img_resolve_and_build_url - Resolve img_src_buf and build vbxe.php URL
+; img_resolve_and_build_url - Resolve relative image URL and build converter URL
+; Steps: 1) Copy img_src_buf → url_buffer, resolve via http_resolve_url
+;        2) Strip N: prefix back to img_src_buf
+;        3) Build: m_prefix + img_src_buf + m_suffix → url_buffer
+; WARNING: Overwrites url_buffer! Caller must save/restore if needed
 ; ----------------------------------------------------------------------------
 .proc img_resolve_and_build_url
         ; Copy img_src_buf to url_buffer for resolve
@@ -350,7 +350,11 @@ img_pix_cnt  dta b(0),b(0),b(0)  ; 24-bit pixel byte counter
 
 ; ----------------------------------------------------------------------------
 ; img_fetch_single - Fetch and display a single image from img_src_buf
-; Called when user clicks on [N]IMG link
+; Called from: ui_follow_link (main menu), render_page_pause (--More-- prompt),
+;             http_download (deferred after page download closes N1:)
+; Flow: save url → resolve → OPEN N1: → header → alloc → palette → pixels →
+;       CLOSE → set palette → show fullscreen → wait key → restore → return
+; Saves/restores url_buffer (converter URL would corrupt page URL)
 ; ----------------------------------------------------------------------------
 .proc img_fetch_single
         ; Save page URL (img_resolve_and_build_url overwrites url_buffer)
@@ -400,12 +404,6 @@ img_pix_cnt  dta b(0),b(0),b(0)  ; 24-bit pixel byte counter
 ?pal_ok
 
         status_msg COL_YELLOW, m_step6
-
-        ; Reset pixel byte counter
-        lda #0
-        sta img_pix_cnt
-        sta img_pix_cnt+1
-        sta img_pix_cnt+2
 
         ; Init write pointer
         jsr vbxe_img_begin_write
@@ -533,4 +531,4 @@ me_pal   dta c'IMG err: palette',0
 
 ; Image URL prefix/suffix (global, used by img_resolve_and_build_url)
 m_prefix dta c'N:http://turiecfoto.sk/vbxe.php?url=',0
-m_suffix dta c'&w=320&h=184&iw=320',0
+m_suffix dta c'&w=320&h=208&iw=320',0
