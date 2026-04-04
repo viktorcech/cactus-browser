@@ -1,5 +1,5 @@
 ; ============================================================================
-; VBXE Web Browser for Atari XE/XL
+; Cactus - Web Browser for Atari XE/XL
 ; Requires: VBXE + FujiNet
 ; Assembler: MADS
 ; Build: mads browser.asm -o:browser.xex

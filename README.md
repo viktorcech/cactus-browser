@@ -44,7 +44,7 @@ At the SDX command line, just run: `browser.xex`
 - **Up to 64 links per page** with palette-encoded link detection, recycled on each page scroll
 - **Word wrapping** — intelligent wrapping at word boundaries with indentation support
 - **Skip to heading** — press H during `--More--` prompt to jump past navigation menus to next heading
-- **Built-in search** — type a query (without `.`) in URL bar to search the web
+- **Built-in web search** — type any query without a dot in the URL bar to search the web via DuckDuckGo
 - **URL navigation** with address bar, auto-prefix, and case normalization
 - **Relative URL resolution** — links and images resolved against base URL
 - **History** — back navigation with scroll position preservation (16 entries)
@@ -64,7 +64,7 @@ At the SDX command line, just run: `browser.xex`
 | **TAB** | Cycle to next link on screen |
 | **Return** | Follow selected link / scroll next page |
 | **Space** | Scroll to next page |
-| **U** | Enter URL (or search query) |
+| **U** | Enter URL or search query (no dot = web search via DuckDuckGo) |
 | **B** | Back (history) |
 | **H** | Skip to next heading (during `--More--`) |
 | **P** | Toggle proxy mode |

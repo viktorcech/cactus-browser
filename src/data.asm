@@ -5,7 +5,7 @@
 ; Strings (stay in code segment)
         icl 'build_stamp.asm'          ; msg_welcome with build date/time
 ; (title screen strings moved to title.asm)
-msg_author     dta c'w1k 2025-2026  github.com/viktorcech/vbxe-browser',0
+msg_author     dta c'w1k 2026  github.com/viktorcech/vbxe-browser',0
 msg_no_vbxe    dta c'VBXE not detected!',0
 
 ; ============================================================================

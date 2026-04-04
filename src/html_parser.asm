@@ -81,6 +81,7 @@ ENTITY_BUF_SZ  = 8
         sta in_pre
         sta img_src_len
         sta utf8_skip
+        sta utf8_lead
         sta td_count
         sta zp_link_num
         lda #1
@@ -108,13 +109,18 @@ parse_loop_re
         cpy zp_rx_len
         beq parse_chunk_done
         inc chunk_idx
-        ; Jump table dispatch (constant time, all 7 states)
+        ; Fast path: PS_NORMAL (state 0) is most common (~65% of bytes)
         ldx zp_parse_state
+        bne ?dispatch
+        lda rx_buffer,y
+        jmp parse_normal
+?dispatch
+        ; Table dispatch for states 1-6
         lda state_tbl_hi,x
         sta zp_tmp_ptr+1
         lda state_tbl_lo,x
         sta zp_tmp_ptr
-        lda rx_buffer,y        ; reload char (Y = byte index before inc)
+        lda rx_buffer,y
         jmp (zp_tmp_ptr)
 
 parse_chunk_done
@@ -144,7 +150,7 @@ state_tbl_hi
         cmp #'&'
         beq ?start_ent
 
-        ; UTF-8 filtering: Atari has no UTF-8 font, skip all non-ASCII bytes
+        ; UTF-8 transliteration: convert accented chars to ASCII equivalents
         ; 2-byte ($C0-$DF lead + 1 cont), 3-byte ($E0-$EF + 2), 4-byte ($F0+)
         ldx utf8_skip
         bne ?utf8_cont
@@ -154,16 +160,33 @@ state_tbl_hi
         bcc ?utf2
         cmp #$F0               ; 4-byte UTF-8 lead (F0-F7)?
         bcc ?utf3
-        jmp parse_loop_re      ; >= F0: skip
-?utf2   lda #1
+        ; >= F0: 4-byte lead, skip 3 continuation bytes
+        lda #3
         sta utf8_skip
-        jmp parse_loop_re      ; skip lead byte, skip 1 more
+        lda #0
+        sta utf8_lead
+        jmp parse_loop_re
+?utf2   ; 2-byte UTF-8 lead - save for transliteration lookup
+        sta utf8_lead
+        lda #1
+        sta utf8_skip
+        jmp parse_loop_re
 ?utf3   lda #2
         sta utf8_skip
-        jmp parse_loop_re      ; skip lead byte, skip 2 more
+        lda #0
+        sta utf8_lead           ; no transliteration for 3-byte sequences
+        jmp parse_loop_re
 ?utf8_cont
         dec utf8_skip
-        jmp parse_loop_re      ; skip continuation byte
+        bne ?utf8_jlp           ; more continuation bytes to skip
+        ; Last continuation byte — try transliteration
+        ldx utf8_lead
+        beq ?utf8_jlp           ; no lead saved (3/4-byte), skip
+        jsr utf8_xlat           ; A=cont byte, X=lead → A=ascii or 0
+        beq ?utf8_jlp           ; 0 = no mapping, skip
+        jmp ?ascii              ; emit transliterated char
+?utf8_jlp
+        jmp parse_loop_re
 
 ?ascii  ldx zp_in_skip
         bne ?skip
@@ -450,6 +473,8 @@ html_flush = render_flush_word
         bne ?head_chk
         ldx skip_to_heading
         bne ?skip
+        ldx skip_to_frag
+        bne ?skip
 ?emit   ldx in_pre
         bne ?pre_ch
         cmp #13
@@ -491,9 +516,67 @@ html_flush = render_flush_word
 is_closing     dta 0          ; 1 = closing tag (</...>), set when '/' seen at tag start
 in_title       dta 0          ; 1 = inside <title>: chars go to title_buf via render_char
 in_pre         dta 0          ; 1 = inside <pre>: bypass word wrap, only LF=newline, CR skipped
-utf8_skip      dta 0          ; bytes to skip in multi-byte UTF-8 (no UTF-8 font on Atari)
+utf8_skip      dta 0          ; bytes remaining in multi-byte UTF-8 sequence
+utf8_lead      dta 0          ; saved lead byte for 2-byte UTF-8 transliteration
 td_count       dta 0          ; table cell counter per <tr> row (reset at open_tr)
 zp_in_head     dta 0          ; 1 = inside <head>: skip all content except <title>
+
+; Fragment anchor support
+FRAG_BUF_SZ    = 32
+skip_to_frag   dta 0          ; 1 = suppress output until matching id/name found
+frag_buf       .ds FRAG_BUF_SZ ; fragment text (from URL #anchor)
+
+; ============================================================================
+; UTF-8 to ASCII Transliteration
+; Input: A = continuation byte ($80-$BF), X = lead byte (C3/C4/C5)
+; Output: A = ASCII char, or 0 = no mapping (Z flag set)
+; ============================================================================
+.proc utf8_xlat
+        and #$3F               ; index 0-63
+        tay
+        cpx #$C3
+        beq ?c3
+        cpx #$C4
+        beq ?c4
+        cpx #$C5
+        beq ?c5
+        lda #0                 ; unknown lead byte
+        rts
+?c3     lda utf8_c3,y
+        rts
+?c4     lda utf8_c4,y
+        rts
+?c5     lda utf8_c5,y
+        rts
+.endp
+
+; C3: U+00C0-U+00FF (Latin-1 Supplement: À-ÿ)
+utf8_c3
+        dta c'AAAAAAAC'        ; $80-$87: À Á Â Ã Ä Å Æ Ç
+        dta c'EEEEIIII'        ; $88-$8F: È É Ê Ë Ì Í Î Ï
+        dta c'DNOOOO'          ; $90-$95: Ð Ñ Ò Ó Ô Õ
+        dta c'O'               ; $96: Ö
+        dta b(0)               ; $97: × (skip)
+        dta c'OUUUUYTS'        ; $98-$9F: Ø Ù Ú Û Ü Ý Þ ß→s
+        dta c'aaaaaaac'        ; $A0-$A7: à á â ã ä å æ ç
+        dta c'eeeeiiiidn'      ; $A8-$B1: è-ë ì-ï ð ñ
+        dta c'ooooo'           ; $B2-$B6: ò ó ô õ ö
+        dta b(0)               ; $B7: ÷ (skip)
+        dta c'ouuuuyty'        ; $B8-$BF: ø ù ú û ü ý þ ÿ
+
+; C4: U+0100-U+013F (Latin Extended-A, part 1)
+utf8_c4
+        dta c'AaAaAaCcCcCcCcDd' ; $80-$8F: Ā-ď
+        dta c'DdEeEeEeEeEeGgGg' ; $90-$9F: Đ-ğ
+        dta c'GgGgHhHhIiIiIiIi' ; $A0-$AF: Ġ-į
+        dta c'IiIiJjKkkLlLlLlL'  ; $B0-$BF: İ-Ŀ
+
+; C5: U+0140-U+017F (Latin Extended-A, part 2)
+utf8_c5
+        dta c'lLlNnNnNnnNnOoOo' ; $80-$8F: ŀ-ŏ
+        dta c'OoOoRrRrRrSsSsSs' ; $90-$9F: Ő-ş
+        dta c'SsTtTtTtUuUuUuUu' ; $A0-$AF: Š-ů
+        dta c'UuUuWwYyYZzZzZzs' ; $B0-$BF: Ű-ſ
 
 ; Buffers
 tag_name_buf   .ds TAG_BUF_SIZE

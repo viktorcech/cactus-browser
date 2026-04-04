@@ -1,6 +1,6 @@
 ; ============================================================================
 ; VBXE Constants, Register Offsets, and Macros
-; For VBXE Web Browser - Atari XE/XL
+; For Cactus - Atari XE/XL
 ; Assembler: MADS
 ; ============================================================================
 

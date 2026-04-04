@@ -8,7 +8,7 @@
 
         ; === Title (row 1, centered) ===
         lda #1
-        ldx #22
+        ldx #34
         jsr vbxe_setpos
         lda #ATTR_H1
         jsr vbxe_setattr
@@ -154,7 +154,7 @@
 
         ; === Author (row 24, centered) ===
         lda #24
-        ldx #15
+        ldx #18
         jsr vbxe_setpos
         lda #ATTR_DECOR
         jsr vbxe_setattr
@@ -167,7 +167,7 @@
 .endp
 
 ; Title screen strings
-tw_title    dta c'V B X E   W E B   B R O W S E R',0
+tw_title    dta c'C A C T U S',0
 tw_subtitle dta c'The Internet on your Atari XL/XE!',0
 tw_req      dta c'Requires: VBXE + FujiNet + ST Mouse (port 2)',0
 tw_ctrl_hdr dta c'Controls:',0

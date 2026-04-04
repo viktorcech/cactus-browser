@@ -634,16 +634,69 @@ close_code = close_italic
         ; Must match exactly "src" (not "srcset" etc.)
         lda attr_name_buf
         cmp #'s'
-        bne ?done
+        bne ?chk_id
         lda attr_name_buf+1
         cmp #'r'
-        bne ?done
+        bne ?chk_id
         lda attr_name_buf+2
         cmp #'c'
+        bne ?chk_id
+        lda attr_name_buf+3
+        bne ?chk_id            ; must be null (reject "srcset")
+        jsr store_img_src
+        rts
+
+?chk_id ; Check "id" attribute (for fragment anchors)
+        lda skip_to_frag
+        beq ?done              ; not looking for fragment
+        lda attr_name_buf
+        cmp #'i'
+        bne ?chk_name
+        lda attr_name_buf+1
+        cmp #'d'
+        bne ?chk_name
+        lda attr_name_buf+2
+        bne ?chk_name          ; must be exactly "id"
+        jmp check_frag_match
+
+?chk_name
+        ; Check "name" attribute (for fragment anchors)
+        lda attr_name_buf
+        cmp #'n'
+        bne ?done
+        lda attr_name_buf+1
+        cmp #'a'
+        bne ?done
+        lda attr_name_buf+2
+        cmp #'m'
         bne ?done
         lda attr_name_buf+3
-        bne ?done              ; must be null (reject "srcset")
-        jsr store_img_src
+        cmp #'e'
+        bne ?done
+        lda attr_name_buf+4
+        bne ?done              ; must be exactly "name"
+        jmp check_frag_match
+
+?done   rts
+.endp
+
+; ============================================================================
+; check_frag_match - Compare attr_val_buf against frag_buf
+; If match: clear skip_to_frag (start rendering from here)
+; ============================================================================
+.proc check_frag_match
+        ldy #0
+?cmp    lda frag_buf,y
+        cmp attr_val_buf,y
+        bne ?done              ; mismatch
+        tax                    ; Z=1 if null terminator
+        beq ?match             ; both null → match!
+        iny
+        cpy #FRAG_BUF_SZ-1
+        bne ?cmp
+        rts                    ; too long, no match
+?match  lda #0
+        sta skip_to_frag       ; Fragment target found!
 ?done   rts
 .endp
 

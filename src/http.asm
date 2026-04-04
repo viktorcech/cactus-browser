@@ -312,6 +312,7 @@ pb_rd_save_hi    dta b(0)
 ; Input: url_buffer already set
 ; ----------------------------------------------------------------------------
 .proc http_navigate
+        jsr http_extract_frag   ; strip #fragment, set skip_to_frag
         jsr http_ensure_prefix
         jsr http_url_tolower
         jsr http_save_base

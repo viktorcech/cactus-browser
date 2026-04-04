@@ -85,15 +85,27 @@
         jsr render_do_nl
         jsr render_indent_out
 
-?fits   ldx #0
+?fits   ; Skip check once for entire word
+        lda skip_to_heading
+        ora skip_to_frag
+        bne ?clr
+        ; Position VBXE cursor once (putchar auto-advances)
+        lda zp_render_row
+        ldx zp_render_col
+        jsr vbxe_setpos
+        ; Output chars — putchar preserves X (word fits, no wrap)
+        ldx #0
 ?lp     cpx zp_word_len
-        beq ?clr
+        beq ?upd
         lda word_buf,x
-        stx zp_tmp3            ; save index
-        jsr render_out_char    ; A = character
-        ldx zp_tmp3            ; restore index
+        jsr vbxe_putchar
         inx
         bne ?lp
+?upd    ; Bulk update render_col
+        lda zp_render_col
+        clc
+        adc zp_word_len
+        sta zp_render_col
 
 ?clr    lda #0
         sta zp_word_len
@@ -108,6 +120,8 @@
 ; ----------------------------------------------------------------------------
 .proc render_out_char
         ldx skip_to_heading
+        bne ?skip_ret
+        ldx skip_to_frag
         bne ?skip_ret
         pha
         lda zp_render_row
@@ -142,6 +156,8 @@
 ; ----------------------------------------------------------------------------
 .proc render_do_nl
         lda skip_to_heading
+        bne ?ok_ret
+        lda skip_to_frag
         bne ?ok_ret
         lda #0
         sta zp_render_col
@@ -412,12 +428,20 @@ rpp_state_buf   .ds 15             ; bulk save: ZP $84-$92 (cur_attr..entity_idx
 .proc render_indent_out
         ldx zp_indent
         beq ?done
+        ; Position once, putchar auto-advances
+        lda zp_render_row
+        ldx zp_render_col
+        jsr vbxe_setpos
+        ldx zp_indent
 ?lp     lda #CH_SPACE
-        stx zp_tmp3            ; save counter
-        jsr render_out_char    ; A = space
-        ldx zp_tmp3            ; restore counter
+        jsr vbxe_putchar
         dex
         bne ?lp
+        ; Bulk update render_col
+        lda zp_render_col
+        clc
+        adc zp_indent
+        sta zp_render_col
 ?done   rts
 .endp
 
@@ -496,13 +520,21 @@ render_set_attr = vbxe_setattr
 .proc render_hr_line
         lda #ATTR_DECOR
         sta zp_cur_attr
-        ldx #SCR_COLS
+        ; Position once, output 79 dashes fast (no wrap, X preserved)
+        lda zp_render_row
+        ldx zp_render_col
+        jsr vbxe_setpos
+        ldx #SCR_COLS-1
 ?lp     lda #'-'
-        stx zp_tmp3            ; save counter
-        jsr render_out_char    ; A = '-'
-        ldx zp_tmp3            ; restore counter
+        jsr vbxe_putchar
         dex
         bne ?lp
+        ; Update render_col for 79 fast chars
+        lda #SCR_COLS-1
+        sta zp_render_col
+        ; Last dash via render_out_char (triggers wrap + pagination)
+        lda #'-'
+        jsr render_out_char
         lda #ATTR_NORMAL
         sta zp_cur_attr
         rts

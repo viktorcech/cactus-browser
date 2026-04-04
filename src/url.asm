@@ -684,3 +684,40 @@ proxy_prefix dta c'N:https://turiecfoto.sk/proxy.php?url=',0
 .endp
 
 search_prefix dta c'turiecfoto.sk/search.php?q=',0
+
+; ----------------------------------------------------------------------------
+; http_extract_frag - Extract #fragment from url_buffer
+; Sets skip_to_frag=1 and fills frag_buf if '#' found
+; Strips '#...' from url_buffer (server doesn't need it)
+; ----------------------------------------------------------------------------
+.proc http_extract_frag
+        lda #0
+        sta skip_to_frag
+        ldy #0
+?scan   lda url_buffer,y
+        beq ?done              ; no fragment found
+        cmp #'#'
+        beq ?found
+        iny
+        bne ?scan
+?done   rts
+?found  ; Null-terminate URL at '#'
+        lda #0
+        sta url_buffer,y
+        sty url_length
+        ; Copy fragment (after '#') to frag_buf
+        iny                    ; skip '#'
+        ldx #0
+?cp     lda url_buffer,y
+        sta frag_buf,x
+        beq ?set               ; null terminator copied
+        iny
+        inx
+        cpx #FRAG_BUF_SZ-1
+        bne ?cp
+        lda #0
+        sta frag_buf,x         ; force null-terminate
+?set    lda #1
+        sta skip_to_frag
+        rts
+.endp
