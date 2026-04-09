@@ -37,3 +37,13 @@ url_save_len   dta a(0)
 
 ; Image palette buffer (768 bytes = 256 colors * 3 bytes RGB)
 img_pal_buf    .ds 768
+
+; Large image transfer buffer for fast SIO reads (2KB)
+; fn_read_img reads up to 2048 bytes per SIO call into this buffer,
+; then vbxe_img_write_big copies it to VRAM. This reduces SIO overhead
+; ~8x vs the standard 255-byte rx_buffer path.
+; Located above $7FFF so it's accessible even when MEMAC B is active.
+IMG_BIG_SIZE   = $0800         ; 2048 bytes
+img_big_buf    .ds IMG_BIG_SIZE
+img_chunk_lo   dta 0           ; 16-bit byte count (lo)
+img_chunk_hi   dta 0           ; 16-bit byte count (hi)

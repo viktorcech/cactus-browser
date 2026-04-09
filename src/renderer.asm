@@ -428,16 +428,12 @@ rpp_state_buf   .ds 15             ; bulk save: ZP $84-$92 (cur_attr..entity_idx
 .proc render_indent_out
         ldx zp_indent
         beq ?done
-        ; Position once, putchar auto-advances
         lda zp_render_row
         ldx zp_render_col
         jsr vbxe_setpos
+        lda #CH_SPACE
         ldx zp_indent
-?lp     lda #CH_SPACE
-        jsr vbxe_putchar
-        dex
-        bne ?lp
-        ; Bulk update render_col
+        jsr vbxe_fill_char     ; batch MEMAC (routine below $4000)
         lda zp_render_col
         clc
         adc zp_indent
@@ -520,16 +516,12 @@ render_set_attr = vbxe_setattr
 .proc render_hr_line
         lda #ATTR_DECOR
         sta zp_cur_attr
-        ; Position once, output 79 dashes fast (no wrap, X preserved)
         lda zp_render_row
         ldx zp_render_col
         jsr vbxe_setpos
+        lda #'-'
         ldx #SCR_COLS-1
-?lp     lda #'-'
-        jsr vbxe_putchar
-        dex
-        bne ?lp
-        ; Update render_col for 79 fast chars
+        jsr vbxe_fill_char     ; batch MEMAC (routine below $4000)
         lda #SCR_COLS-1
         sta zp_render_col
         ; Last dash via render_out_char (triggers wrap + pagination)

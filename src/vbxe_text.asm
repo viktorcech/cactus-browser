@@ -88,6 +88,64 @@ row_addr_hi
 .endp
 
 ; ----------------------------------------------------------------------------
+; vbxe_putchar_fast - Write char (MEMAC B must already be on)
+; Input: A = ASCII character. Advances cursor, wraps lines.
+; Saves ~26 cycles/char by skipping memb_on/memb_off.
+; ----------------------------------------------------------------------------
+.proc vbxe_putchar_fast
+        ldy #0
+        sta (zp_scr_ptr),y    ; write char
+        iny
+        lda zp_cur_attr
+        sta (zp_scr_ptr),y    ; write attr
+
+        ; Advance screen pointer by 2 (next char+attr position)
+        lda zp_scr_ptr
+        clc
+        adc #2
+        sta zp_scr_ptr
+        bcc ?nc
+        inc zp_scr_ptr+1
+?nc     inc zp_cursor_col
+        lda zp_cursor_col
+        cmp #SCR_COLS
+        bcc ?done
+
+        lda #0
+        sta zp_cursor_col
+        inc zp_cursor_row
+        lda zp_cursor_row
+        cmp #SCR_ROWS
+        bcc ?recalc
+
+        dec zp_cursor_row
+        jsr vbxe_scroll_up
+?recalc jsr calc_scr_ptr
+?done   rts
+.endp
+
+; ----------------------------------------------------------------------------
+; vbxe_fill_char - Fill N chars with given char, batch MEMAC
+; Input: A = fill character, X = count (1-80)
+; Assumes: zp_scr_ptr already set via vbxe_setpos
+; Safe to call from above $4000 (this code is below $4000)
+; ----------------------------------------------------------------------------
+.proc vbxe_fill_char
+        sta ?ch
+        stx ?cnt
+        memb_on 0
+        ldx ?cnt
+?lp     lda ?ch
+        jsr vbxe_putchar_fast
+        dex
+        bne ?lp
+        memb_off
+        rts
+?ch     dta 0
+?cnt    dta 0
+.endp
+
+; ----------------------------------------------------------------------------
 ; vbxe_print - Write ASCIIZ string (A=lo, X=hi of pointer)
 ; ----------------------------------------------------------------------------
 .proc vbxe_print

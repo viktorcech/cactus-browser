@@ -103,6 +103,75 @@ img_wr_bank    dta b(0)        ; MEMAC B bank number
 ?done   rts
 .endp
 
+; ----------------------------------------------------------------------------
+; vbxe_img_write_big - Copy img_big_buf to VRAM, 16-bit count
+; Companion to fn_read_img: handles large (up to 2KB) chunks that
+; fn_read_img deposits into img_big_buf. Uses 16-bit byte counter
+; instead of 8-bit zp_rx_len used by vbxe_img_write_chunk.
+;
+; Input: img_chunk_lo/hi = byte count, zp_img_ptr/img_wr_bank set
+; Source: img_big_buf (at $B724, above $7FFF — unaffected by MEMAC B)
+; Dest: VBXE VRAM via MEMAC B window ($4000-$7FFF)
+; MUST be below $4000 (executes with MEMAC B active)
+; Auto-switches VRAM banks when write pointer crosses $8000 boundary
+; ----------------------------------------------------------------------------
+.proc vbxe_img_write_big
+        lda img_chunk_lo
+        ora img_chunk_hi
+        beq ?done
+
+        ; Set source pointer
+        lda #<img_big_buf
+        sta zp_tmp_ptr
+        lda #>img_big_buf
+        sta zp_tmp_ptr+1
+
+        sei
+        lda img_wr_bank
+        ora #$80
+        sta zp_memb_shadow     ; shadow FIRST (VBI is NMI!)
+        ldy #VBXE_MEMAC_B
+        sta (zp_vbxe_base),y
+
+?lp     ldy #0
+        lda (zp_tmp_ptr),y    ; read from RAM (above $7FFF, safe)
+        sta (zp_img_ptr),y    ; write to VRAM via MEMAC B
+
+        ; Advance source
+        inc zp_tmp_ptr
+        bne ?ns
+        inc zp_tmp_ptr+1
+?ns
+        ; Advance VRAM dest (bank switch on $8000 boundary)
+        inc zp_img_ptr
+        bne ?nc
+        inc zp_img_ptr+1
+        lda zp_img_ptr+1
+        cmp #$80
+        bne ?nc
+        lda #$40
+        sta zp_img_ptr+1
+        inc img_wr_bank
+        lda img_wr_bank
+        ora #$80
+        sta zp_memb_shadow
+        ldy #VBXE_MEMAC_B
+        sta (zp_vbxe_base),y
+?nc
+        ; Decrement 16-bit counter
+        lda img_chunk_lo
+        bne ?dl
+        dec img_chunk_hi
+?dl     dec img_chunk_lo
+        lda img_chunk_lo
+        ora img_chunk_hi
+        bne ?lp
+
+        memb_off
+        cli
+?done   rts
+.endp
+
 ; ============================================================================
 ; Page Buffer - VRAM storage for downloaded HTML pages
 ; Download entire page to VRAM, then render from VRAM (N1: free for images)

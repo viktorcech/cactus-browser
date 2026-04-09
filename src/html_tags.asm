@@ -197,7 +197,7 @@ ctbl_lo dta <nop_tag           ; 0  UNKNOWN
         dta <nop_tag           ; 23 HR (no close)
         dta <nop_tag           ; 24 NOSCRIPT
         dta <close_table       ; 25 TABLE
-        dta <nop_tag           ; 26 TR
+        dta <close_tr          ; 26 TR (reset attr after TH row)
         dta <nop_tag           ; 27 TD
         dta <close_th          ; 28 TH
         dta <close_bq          ; 29 BLOCKQUOTE
@@ -246,7 +246,7 @@ ctbl_hi dta >nop_tag           ; 0  UNKNOWN
         dta >nop_tag           ; 23 HR
         dta >nop_tag           ; 24 NOSCRIPT
         dta >close_table       ; 25 TABLE
-        dta >nop_tag           ; 26 TR
+        dta >close_tr          ; 26 TR (reset attr after TH row)
         dta >nop_tag           ; 27 TD
         dta >close_th          ; 28 TH
         dta >close_bq          ; 29 BLOCKQUOTE
@@ -333,23 +333,39 @@ open_sub
         lda #ATTR_SUB
         jmp render_set_attr
 
+; --- Table state ---
+; Tables use simple " | " cell separators with horizontal rule borders.
+; <th> header rows get colored text (ATTR_H3) and a separator line below.
+; </tr> resets text color after header rows.
+tbl_active     dta 0              ; 1 = inside table
+tbl_had_th     dta 0              ; 1 = row had <th> (draw separator line after)
+
 .proc open_table
         jsr render_flush_word
         jsr render_newline
-        jsr render_tbl_line
+        lda #1
+        sta tbl_active
         lda #0
         sta td_count
-        rts
+        sta tbl_had_th
+        jmp render_tbl_line
 .endp
 
 .proc open_tr
         jsr render_flush_word
         lda td_count
-        beq ?first
+        beq ?first              ; very first TR
+        ; Finish previous row
         jsr render_newline
+        ; Draw separator after TH header row
+        lda tbl_had_th
+        beq ?no_sep
         jsr render_tbl_line
-?first  jsr render_newline
+        jsr render_newline
         lda #0
+        sta tbl_had_th
+?no_sep
+?first  lda #0
         sta td_count
         rts
 .endp
@@ -373,6 +389,8 @@ open_sub
         ldx #>m_tbl_sep
         jsr render_string
 ?first  inc td_count
+        lda #1
+        sta tbl_had_th
         lda #ATTR_H3
         jmp render_set_attr
 .endp
@@ -444,8 +462,14 @@ close_div = open_div
         jsr render_flush_word
         jsr render_newline
         jsr render_tbl_line
-        jmp render_newline
+        jsr render_newline
+        lda #0
+        sta tbl_active
+        rts
 .endp
+
+; Aliases for close handlers
+close_tr = close_italic        ; reset attr to ATTR_NORMAL after TH row
 
 .proc close_bq
         jsr render_flush_word

@@ -164,6 +164,68 @@ RX_BUF_SIZE    = 256
 .endp
 
 ; ----------------------------------------------------------------------------
+; fn_read_img - Read up to 2KB into img_big_buf for fast image streaming
+; Standard fn_read caps at 255 bytes (8-bit zp_rx_len), requiring ~260
+; SIO calls for a 66KB image. This routine reads up to 2048 bytes per
+; SIO call, reducing calls to ~33 (8x fewer, much less SIO overhead).
+; Uses zp_fn_bytes_lo/hi from fn_status, caps at IMG_BIG_SIZE (2048)
+; Output: img_chunk_lo/hi = bytes actually requested, C=0 ok, C=1 error
+; DAUX1/DAUX2 must equal DBYTLO/DBYTHI (FujiNet protocol requirement)
+; ----------------------------------------------------------------------------
+.proc fn_read_img
+        ; Cap at IMG_BIG_SIZE ($0800)
+        lda zp_fn_bytes_hi
+        cmp #>IMG_BIG_SIZE     ; >= 8 pages?
+        bcc ?use               ; < 8 pages, use exact
+        ; >= 2048 bytes: cap
+        lda #<IMG_BIG_SIZE
+        sta img_chunk_lo
+        lda #>IMG_BIG_SIZE
+        sta img_chunk_hi
+        jmp ?do
+?use    sta img_chunk_hi
+        lda zp_fn_bytes_lo
+        sta img_chunk_lo
+        ora img_chunk_hi
+        beq ?nothing
+
+?do     lda #FN_DEVID
+        sta DDEVIC
+        lda fn_cur_unit
+        sta DUNIT
+        lda #FN_CMD_READ
+        sta DCOMND
+        lda #SIO_READ
+        sta DSTATS
+        lda #<img_big_buf
+        sta DBUFLO
+        lda #>img_big_buf
+        sta DBUFHI
+        lda #FN_TIMEOUT
+        sta DTIMLO
+        lda img_chunk_lo
+        sta DBYTLO
+        sta DAUX1
+        lda img_chunk_hi
+        sta DBYTHI
+        sta DAUX2
+
+        jsr SIOV
+        lda DSTATS
+        bmi ?err
+        clc
+        rts
+?err    sec
+        rts
+?nothing
+        lda #0
+        sta img_chunk_lo
+        sta img_chunk_hi
+        clc
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
 ; fn_close - Close FujiNet connection
 ; ----------------------------------------------------------------------------
 .proc fn_close

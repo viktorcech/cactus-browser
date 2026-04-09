@@ -298,6 +298,32 @@ BCB_SCROLL_OFS = 21
         cpx #4
         bne ?ext
 
+        ; --- ANSI color palette (indices $10-$1F, 16 colors) ---
+        ldy #VBXE_CSEL
+        lda #ATTR_ANSI_BASE
+        sta (zp_vbxe_base),y
+
+        ldx #0
+?ansi   ldy #VBXE_CR
+        lda ansi_pal_r,x
+        sta (zp_vbxe_base),y
+        iny
+        lda ansi_pal_g,x
+        sta (zp_vbxe_base),y
+        iny
+        lda ansi_pal_b,x
+        sta (zp_vbxe_base),y
+
+        ldy #VBXE_CSEL
+        txa
+        clc
+        adc #ATTR_ANSI_BASE+1
+        sta (zp_vbxe_base),y
+
+        inx
+        cpx #16
+        bne ?ansi
+
         ; Set palette entries $20-$3F to blue (link colors with embedded link#)
         ldy #VBXE_CSEL
         lda #ATTR_LINK_BASE
@@ -340,4 +366,13 @@ ext_pal_b dta $FF,  $CC,  $BB,  $44
 grad_pal_r dta $10, $20, $30, $50
 grad_pal_g dta $10, $30, $60, $90
 grad_pal_b dta $40, $80, $C0, $FF
+
+; ANSI CGA colors at palette indices $10-$1F
+; Standard 8 colors ($10-$17): black, red, green, yellow, blue, magenta, cyan, white
+; Bright 8 colors ($18-$1F): same order, higher intensity (used with ESC[1m bold)
+; Values match IBM CGA/EGA palette for correct ANSI art rendering
+;              blk  red  grn  yel  blu  mag  cyn  wht  Bblk Bred Bgrn Byel Bblu Bmag Bcyn Bwht
+ansi_pal_r dta $00, $AA, $00, $AA, $00, $AA, $00, $AA, $55, $FF, $55, $FF, $55, $FF, $55, $FF
+ansi_pal_g dta $00, $00, $AA, $55, $00, $00, $AA, $AA, $55, $55, $FF, $FF, $55, $55, $FF, $FF
+ansi_pal_b dta $00, $00, $00, $00, $AA, $AA, $AA, $AA, $55, $55, $55, $55, $FF, $FF, $FF, $FF
 .endp

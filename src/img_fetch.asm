@@ -272,15 +272,19 @@ img_fn_err   dta b(0)
         ora zp_fn_bytes_hi
         beq ?no_data
 
-        jsr fn_read
+        ; Read up to 2KB per SIO call (vs 255B in standard fn_read)
+        ; fn_read_img → img_big_buf, vbxe_img_write_big → VRAM
+        jsr fn_read_img
         bcs ?done              ; read error → show partial image
-        lda zp_rx_len
-        beq ?lp
+        lda img_chunk_lo
+        ora img_chunk_hi
+        beq ?lp                ; zero bytes read, retry
 
         lda #IMG_MAX_RETRIES
         sta img_timeout
 
-        jsr vbxe_img_write_chunk
+        ; Copy chunk from img_big_buf to VBXE VRAM
+        jsr vbxe_img_write_big
         jmp ?lp
 
 ?no_data

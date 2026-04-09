@@ -93,6 +93,9 @@ COL_PINK       = 13   ; underline
 COL_LTGRAY     = 14   ; h5/h6 headings, sup/sub
 COL_LIME       = 15   ; sub
 
+; ANSI SGR color palette (indices $10-$1F)
+ATTR_ANSI_BASE = $10          ; 8 standard + 8 bright ANSI colors
+
 ATTR_NORMAL    = COL_WHITE
 ATTR_LINK      = COL_BLUE     ; basic link color (for UI elements)
 ATTR_LINK_BASE = $20          ; link attrs: $20+link_num (palette $20-$5F = blue)

@@ -84,6 +84,8 @@ ENTITY_BUF_SZ  = 8
         sta utf8_lead
         sta td_count
         sta zp_link_num
+        sta ansi_state
+        sta ansi_bold
         lda #1
         sta zp_in_head         ; start in head-skip mode
         rts
@@ -475,6 +477,15 @@ html_flush = render_flush_word
         bne ?skip
         ldx skip_to_frag
         bne ?skip
+
+        ; ANSI escape sequence handling
+        ; Detects ESC[$1B] and routes to CSI parser for SGR color codes
+        ; Works in both normal text and <pre> blocks
+        ldx ansi_state
+        bne ?ansi_cont         ; already inside ESC sequence
+        cmp #$1B               ; ESC character? start new sequence
+        beq ?ansi_start
+
 ?emit   ldx in_pre
         bne ?pre_ch
         cmp #13
@@ -498,6 +509,14 @@ html_flush = render_flush_word
         ldx in_title
         bne ?emit
         rts
+
+?ansi_start
+        lda #1
+        sta ansi_state
+        rts                    ; consume ESC, don't emit
+
+?ansi_cont
+        jmp ansi_process       ; handle ANSI continuation byte
 .endp
 
 ; ============================================================================
@@ -577,6 +596,155 @@ utf8_c5
         dta c'OoOoRrRrRrSsSsSs' ; $90-$9F: Ő-ş
         dta c'SsTtTtTtUuUuUuUu' ; $A0-$AF: Š-ů
         dta c'UuUuWwYyYZzZzZzs' ; $B0-$BF: Ű-ſ
+
+; ============================================================================
+; ANSI SGR Escape Sequence Handler
+; Supports: ESC[0m (reset), ESC[1m (bold/bright), ESC[22m (normal),
+;           ESC[30-37m (FG), ESC[90-97m (bright FG), ESC[param;...m
+; ============================================================================
+
+; --- ANSI state ---
+ansi_state  dta 0              ; 0=normal, 1=got ESC, 2=in CSI params
+ansi_param  dta 0              ; current parameter value being accumulated
+ansi_bold   dta 0              ; 1=bold (bright) mode active
+
+; ---------------------------------------------------------------------------
+; ansi_process - Handle one byte of ANSI escape sequence
+; Called from html_emit_char when ansi_state > 0
+; ANSI CSI format: ESC [ param1 ; param2 ; ... command_char
+; We only handle 'm' (SGR = Set Graphics Rendition)
+; Input: A = current byte
+; ---------------------------------------------------------------------------
+.proc ansi_process
+        ldx ansi_state
+        cpx #1
+        beq ?expect_bracket    ; state 1: ESC received, expect '['
+        ; state 2: inside CSI, collecting parameter digits
+
+        ; Digit 0-9: accumulate into current parameter
+        cmp #'0'
+        bcc ?cmd
+        cmp #'9'+1
+        bcs ?cmd
+        ; param = param * 10 + (char - '0')
+        ; Multiply by 10 using shifts: x*10 = x*8 + x*2
+        sec
+        sbc #'0'
+        pha
+        lda ansi_param
+        asl                    ; *2
+        sta ?tmp
+        asl                    ; *4
+        asl                    ; *8
+        clc
+        adc ?tmp               ; + *2 = *10
+        sta ansi_param
+        pla
+        clc
+        adc ansi_param         ; + new digit
+        sta ansi_param
+        rts
+
+?cmd    ; Non-digit: check for separator or command
+        cmp #';'
+        beq ?separator         ; ';' separates params (e.g. ESC[1;31m)
+        cmp #'m'
+        beq ?sgr_end           ; 'm' = SGR command, apply and finish
+        ; Unknown command letter (H, J, K, etc.) - not supported, abort
+        lda #0
+        sta ansi_state
+        rts
+
+?expect_bracket
+        cmp #'['               ; CSI introducer
+        bne ?abort
+        lda #2                 ; enter parameter collection state
+        sta ansi_state
+        lda #0
+        sta ansi_param         ; reset first parameter
+        rts
+
+?abort  lda #0                 ; not CSI, abort sequence
+        sta ansi_state
+        rts
+
+?separator
+        jsr ansi_apply_sgr     ; apply current param
+        lda #0
+        sta ansi_param         ; reset for next param
+        rts
+
+?sgr_end
+        jsr ansi_apply_sgr     ; apply last param
+        lda #0
+        sta ansi_state         ; sequence complete
+        rts
+
+?tmp    dta 0
+.endp
+
+; ---------------------------------------------------------------------------
+; ansi_apply_sgr - Apply single SGR (Set Graphics Rendition) parameter
+; Maps ANSI color codes to VBXE palette indices $10-$1F (CGA colors)
+; Palette layout: $10-$17 = standard 8 colors, $18-$1F = bright 8 colors
+; Supported codes:
+;   0       = reset to normal white text
+;   1       = bold (selects bright color variant)
+;   22      = normal intensity (deselects bold)
+;   30-37   = standard foreground: blk,red,grn,yel,blu,mag,cyn,wht
+;   90-97   = bright foreground (same order)
+; Input: ansi_param = SGR code, ansi_bold = bold flag
+; ---------------------------------------------------------------------------
+.proc ansi_apply_sgr
+        lda ansi_param
+        beq ?reset             ; 0 = reset all attributes
+        cmp #1
+        beq ?bold              ; 1 = bold/bright
+        cmp #22
+        beq ?unbold            ; 22 = normal intensity
+        ; Standard foreground 30-37
+        cmp #30
+        bcc ?done
+        cmp #38
+        bcc ?fg_std
+        ; 40-47: background colors (not supported - single attr byte)
+        ; Bright foreground 90-97
+        cmp #90
+        bcc ?done
+        cmp #98
+        bcc ?fg_bright
+?done   rts
+
+?reset  lda #0
+        sta ansi_bold
+        lda #ATTR_NORMAL
+        jmp render_set_attr
+
+?bold   lda #1
+        sta ansi_bold
+        rts
+
+?unbold lda #0
+        sta ansi_bold
+        rts
+
+?fg_std sec
+        sbc #30                ; ANSI code 30-37 → index 0-7
+        clc
+        adc #ATTR_ANSI_BASE    ; → palette $10-$17
+        ldx ansi_bold
+        beq ?set
+        clc
+        adc #8                 ; bold → bright variant $18-$1F
+?set    jmp render_set_attr
+
+?fg_bright
+        sec
+        sbc #90                ; ANSI code 90-97 → index 0-7
+        clc
+        adc #ATTR_ANSI_BASE+8  ; → bright palette $18-$1F
+        jmp render_set_attr
+.endp
 
 ; Buffers
 tag_name_buf   .ds TAG_BUF_SIZE
