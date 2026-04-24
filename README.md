@@ -8,6 +8,15 @@
 
 **Beta 01** — functional browser, testing on real hardware. Help is welcome!
 
+
+## Screenshots
+
+<p align="center">
+  <img src="screens/1.png" alt="Cactus browsing" width="33%">
+  <img src="screens/2.png" alt="Cactus browsing" width="33%">
+  <img src="screens/3.png" alt="Cactus browsing" width="33%">
+</p>
+
 ## Requirements
 
 - Atari 800XL/130XE or compatible (64KB RAM minimum)
@@ -20,15 +29,15 @@
 
 ### From SpartaDOS X (recommended)
 
-The fastest way to run the browser on real hardware. [SpartaDOS X](https://atariwiki.org/wiki/Wiki.jsp?page=SpartaDOS%20X) with FujiNet supports hi-SIO (high-speed SIO), so the ~10 KB XEX loads almost instantly.
+Recommended for real hardware: [SpartaDOS X](https://atariwiki.org/wiki/Wiki.jsp?page=SpartaDOS%20X) with FujiNet enables hi-SIO (high-speed SIO), which significantly speeds up page downloads over the N: device.
 
-At the SDX command line, just run: `browser.xex`
+At the SDX command line, just run: `cactus.xex`
 
 ### From Altirra emulator
 
 1. System → Devices → Add → Video Board XE (VBXE)
 2. System → uncheck BASIC (important!)
-3. File → Boot Image → select `browser.xex`
+3. File → Boot Image → select `cactus.xex`
 
 ## Features
 
@@ -36,17 +45,19 @@ At the SDX command line, just run: `browser.xex`
 - **GMON gradient title screen** — graphical blue gradient banner using VBXE graphics mode
 - **ST mouse** — point and click on links, works during browsing and page scrolling (`--More--` prompt)
 - **TAB navigation** — cycle through visible links with TAB, follow with RETURN (no mouse needed)
-- **HTML rendering** — 48 tags including headings (h1–h6), paragraphs, links, lists (ul/ol with bullets and numbering), bold, italic, underline, superscript, subscript, tables, blockquotes, code/pre, definition lists (dt/dd), horizontal rules, images, HTML5 semantic tags (article, section, nav, header, footer, main, aside)
+- **HTML rendering** — 47 tags including headings (h1–h6), paragraphs, links, lists (ul/ol with bullets and numbering), bold, italic, underline, superscript, subscript, tables, blockquotes, code/pre, definition lists (dt/dd), horizontal rules, images, HTML5 semantic tags (article, section, nav, header, footer, main, aside)
 - **HTML entity decoding** — `&amp;` `&lt;` `&gt;` `&nbsp;` `&quot;` and numeric `&#NNN;`
 - **HTML comment support** — `<!-- -->` properly parsed and skipped
-- **UTF-8 filtering** — multi-byte sequences skipped gracefully
-- **Image viewing** — inline images shown as clickable `[N]IMG` links, fullscreen centered 248-color display (up to 320×208) via server-side converter
+- **ANSI colors** — `ESC[...m` sequences render as colored text
+- **UTF-8 support** — accented Latin characters converted to ASCII
+- **Image viewing** — inline images shown as clickable `[N]IMG` links, fullscreen centered 248-color display (up to 320×192) via server-side converter
 - **Up to 64 links per page** with palette-encoded link detection, recycled on each page scroll
 - **Word wrapping** — intelligent wrapping at word boundaries with indentation support
 - **Skip to heading** — press H during `--More--` prompt to jump past navigation menus to next heading
-- **Built-in web search** — type any query without a dot in the URL bar to search the web via DuckDuckGo
+- **Built-in web search** — type any query without a dot in the URL bar to search the web via turiecfoto.sk
 - **URL navigation** with address bar, auto-prefix, and case normalization
 - **Relative URL resolution** — links and images resolved against base URL
+- **Fragment anchors** — `#name` in URL jumps to matching spot on the page
 - **History** — back navigation with scroll position preservation (16 entries)
 - **Optional proxy mode** — toggle with P key, strips scripts/styles for cleaner pages
 - **VRAM page buffer** — entire page downloaded to VRAM ($14000+), then rendered offline. N1: is free for image downloads during rendering
@@ -64,11 +75,11 @@ At the SDX command line, just run: `browser.xex`
 | **TAB** | Cycle to next link on screen |
 | **Return** | Follow selected link / scroll next page |
 | **Space** | Scroll to next page |
-| **U** | Enter URL or search query (no dot = web search via DuckDuckGo) |
+| **U** | Enter URL or search query (no dot = web search via turiecfoto.sk) |
 | **B** | Back (history) |
 | **H** | Skip to next heading (during `--More--`) |
 | **P** | Toggle proxy mode |
-| **Q** | Quit / return to welcome screen |
+| **Q** | Quit (also stops page loading) |
 
 ## Building
 
@@ -78,18 +89,18 @@ Requires [MADS](https://github.com/tebe6502/Mad-Assembler) (Mad Assembler).
 ./build.sh
 ```
 
-The build script generates a build timestamp in `src/build_stamp.asm` and produces `bin/browser.xex`.
+The build script generates a build timestamp in `build_stamp.asm` and produces `bin/cactus.xex`.
 
 Manual build:
 ```bash
-mads src/browser.asm -o:bin/browser.xex -l:bin/browser.lab
+./mads.exe cactus.asm -o:cactus.xex
 ```
 
 ## Source Files
 
 | File | Description |
 |------|-------------|
-| `browser.asm` | Main program, entry point, module includes |
+| `cactus.asm` | Main program, entry point, module includes |
 | `vbxe_const.asm` | VBXE registers, XDL flags, VRAM layout, system equates, zero-page variables, macros |
 | `vbxe_detect.asm` | VBXE hardware detection (FX core version check) |
 | `vbxe_init.asm` | VBXE initialization: XDL, font copy, blitter BCBs, palette (8 colors + gradient + 64 link colors) |
@@ -99,7 +110,7 @@ mads src/browser.asm -o:bin/browser.xex -l:bin/browser.lab
 | `http.asm` | HTTP workflow: two-phase download (network→VRAM) + render (VRAM→parser) |
 | `url.asm` | URL normalization, prefix handling, base URL extraction, relative URL resolution |
 | `html_parser.asm` | Streaming byte-by-byte HTML parser (7 states: text, tag, entity, attr name/value, skip, comment) |
-| `html_tags.asm` | Tag handlers (48 tags), attribute extraction (href, src), link/image storage |
+| `html_tags.asm` | Tag handlers (47 tags), attribute extraction (href, src), link/image storage |
 | `html_entities.asm` | Tag name lookup table, HTML entity decoding (named + numeric) |
 | `renderer.asm` | Text layout: word wrapping, indentation, pagination, `--More--` prompt, skip-to-heading |
 | `keyboard.asm` | Keyboard input via CIO K: device, line editing with backspace/escape |
@@ -113,13 +124,13 @@ mads src/browser.asm -o:bin/browser.xex -l:bin/browser.lab
 
 ## Image Support
 
-Images on web pages appear as clickable `[N]IMG` links in blue. Clicking downloads the image through a server-side converter that resizes, centers on a black canvas, and converts to VBXE 248-color format (up to 320×208 pixels), then displays fullscreen. Press any key to return to the page.
+Images on web pages appear as clickable `[N]IMG` links in blue. Clicking downloads the image through a server-side converter that resizes, centers on a black canvas, and converts to VBXE 248-color format (up to 320×192 pixels), then displays fullscreen. Press any key to return to the page.
 
 The browser uses a two-phase architecture: the HTML page is first downloaded entirely into the VRAM page buffer, then N1: is closed. During rendering, image clicks reopen N1: for the converter — no second FujiNet connection needed. After viewing an image, the parser continues from the exact position in the buffered page.
 
 ## Architecture
 
-- **Code**: starts at $2000, critical MEMAC B routines stay below $4000
+- **Code**: starts at $3000, stays below $4000 (MEMAC B window starts at $4000)
 - **VBXE VRAM**: screen $0000, BCBs $1300, XDL $1400, font $2000, images $3000+, page buffer $14000+
 - **MEMAC B window**: $4000–$7FFF maps to VBXE VRAM banks when active
 - **FujiNet**: single N1: device — page download closes before image fetch
