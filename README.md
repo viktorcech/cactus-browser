@@ -4,11 +4,6 @@
 
 ![screenshot](https://img.shields.io/badge/status-beta-blue)
 
-## Status
-
-**Beta 01** — functional browser, testing on real hardware. Help is welcome!
-
-
 ## Screenshots
 
 <p align="center">
