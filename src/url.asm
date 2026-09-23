@@ -22,33 +22,31 @@
         cmp #'h'
         beq ?addN
         cmp #'H'
-        beq ?addN
-        jmp ?addFull
+        jne ?addFull
 
         ; Has "http://..." but missing "N:" - shift by 2 and prepend "N:"
 ?addN   ldy url_length
         cpy #URL_BUF_SIZE-3
         bcc ?sh2
         ldy #URL_BUF_SIZE-3
-?sh2    clc
-        tya
+?sh2    tya
+        clc
         adc #2
         tax
         stx url_length
-?sh2lp  dex
+        dex
         dey
         bmi ?cp2
-        lda url_buffer,y
+?sh2lp  lda url_buffer,y
         sta url_buffer,x
-        jmp ?sh2lp
+        dex
+        dey
+        bpl ?sh2lp
 ?cp2    lda #'N'
         sta url_buffer
         lda #':'
         sta url_buffer+1
-        ldy url_length
-        lda #0
-        sta url_buffer,y
-        jmp ?ok
+        bne ?term              ; always (A = ':')
 
 ?addFull
         ; No http prefix - shift buffer right by 9 and prepend "N:http://"
@@ -57,27 +55,28 @@
         bcc ?shift
         ldy #URL_BUF_SIZE-10
 ?shift
-        clc
         tya
+        clc
         adc #9
         tax                     ; X = new end position
         stx url_length
-?shlp   dex
+        dex
         dey
         bmi ?copy
-        lda url_buffer,y
+?shlp   lda url_buffer,y
         sta url_buffer,x
-        jmp ?shlp
+        dex
+        dey
+        bpl ?shlp
 
 ?copy   ; Copy "N:http://" to start
-        ldx #0
+        ldx #8
 ?cplp   lda ?prefix,x
         sta url_buffer,x
-        inx
-        cpx #9
-        bne ?cplp
-        ; Null-terminate
-        ldy url_length
+        dex
+        bpl ?cplp
+?term   ldy url_length         ; null-terminate
+
         lda #0
         sta url_buffer,y
 ?ok     rts
@@ -113,7 +112,7 @@
         bne ?fs_next
         iny                    ; Y = position after "://"
         sty zp_tmp2
-        jmp ?scan_path
+        bne ?scan_path         ; always (Y != 0 after iny)
 ?fs_next
         iny
         bne ?find_scheme
@@ -122,22 +121,19 @@
         ; Now scan for '/' in the path portion (after host)
         lda url_buffer,y
         beq ?check
+        iny
         cmp #'/'
         bne ?sp_next
-        iny
         sty zp_tmp1            ; save position after this '/'
-        dey
 ?sp_next
-        iny
+        tya
         bne ?scan_path
 
 ?check  ; If no path '/' found (zp_tmp1 <= zp_tmp2), use whole URL + "/"
         lda zp_tmp1
         cmp zp_tmp2
-        bcc ?use_all
         beq ?use_all
-        ; Good - copy up to last path '/'
-        jmp ?copy
+        bcs ?copy              ; path '/' after the host: copy up to it
 
 ?use_all
         ; No path slash - copy whole URL and append "/"
@@ -185,8 +181,7 @@
         cmp #'h'
         beq ?chk_http
         cmp #'H'
-        beq ?chk_http
-        jmp ?not_abs
+        bne ?not_abs
 ?chk_http
         lda url_buffer+1
         cmp #'t'
@@ -239,7 +234,7 @@
         ; Look for "://" then the next "/" after that
         ldy #0
 ?rr1    lda base_url,y
-        beq ?rr_use_all        ; no "://" found, use whole base
+        beq ?rr_use_all        ; no "://" found: treat as relative
         cmp #':'
         bne ?rr1n
         iny
@@ -284,32 +279,21 @@
         sta url_buffer,y
         iny
         bne ?rr4
-?rr4d
-        ; Append root-relative path from rx_buffer
-        ldx #0
-?rr5    lda rx_buffer,x
-        sta url_buffer,y
-        beq ?rr_upd
-        iny
-        inx
-        cpy #URL_BUF_SIZE-1
-        bne ?rr5
-        lda #0
-        sta url_buffer,y
-?rr_upd sty url_length
-        rts
+?rr4d   jmp ?s2d               ; append the path from rx_buffer at Y
 
 ?rr_use_all
-        ; Fallback: use whole base_url + url_buffer
-        jmp ?s1                ; treat as relative
+        jmp ?s1                ; (Y as found, as before)
 .endp
 
 ; ----------------------------------------------------------------------------
-; http_check_img_ext - Check if url_buffer ends with image extension
-; Output: C=1 if image (.png, .jpg, .gif), C=0 if not
+; url_ext - Lower-cased extension of url_buffer (after the last '.') in
+; ext_buf, NUL-terminated. C=1 when there is none or it is longer than any
+; listed extension (so it cannot match).
 ; ----------------------------------------------------------------------------
-.proc http_check_img_ext
-        ; Find last '.' in URL
+EXT_MAX = 4
+ext_buf = $0550                 ; page 5 (after find_fold)
+
+.proc url_ext
         ldy #0
         ldx #$FF               ; X = position of last dot ($FF=none)
 ?scan   lda url_buffer,y
@@ -321,81 +305,97 @@
 ?next   iny
         bne ?scan
 ?check  cpx #$FF
-        bne ?has_dot
+        beq ?none              ; C = 1
+        ldy #0
+?cp     lda url_buffer+1,x     ; char after the dot
+        beq ?end
+ .if 1                          ; 2026-09-23 (6502-idioms: to lower, lowercase leaves on the first compare)
+        cmp #'Z'+1             ; to lower
+        bcs ?st
+        cmp #'A'
+        bcc ?st
+        ora #$20
+?st     sta ext_buf,y
+ .else
+        cmp #'A'               ; to lower
+        bcc ?st
+        cmp #'Z'+1
+        bcs ?st
+        ora #$20
+?st     sta ext_buf,y
+ .endif
+        inx
+        iny
+        cpy #EXT_MAX+1
+        bne ?cp
+?none   sec                    ; too long / no dot
+        rts
+?end    sta ext_buf,y          ; A = 0
         clc
-        rts                    ; no dot found
-?has_dot
-        ; Y = end of URL, X = last dot
-        ; Compare extension (after dot) against known types
-        inx                    ; X = first char after dot
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'p'
-        beq ?p
-        cmp #'j'
-        beq ?j
-        cmp #'g'
-        beq ?g
-        jmp ?no
-?p      ; "png"
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
+; ext_in_table - Is ext_buf in the NUL-separated list at A/X (ends with 0)?
+; Output: C=1 found, C=0 not
+; ----------------------------------------------------------------------------
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: the compare/skip loops in one page)
+        page_fit ext_in_table.et_s-ext_in_table, ext_in_table.et_e-ext_in_table.et_s
+ .endif
+.proc ext_in_table
+        sta ?t+1
+        stx ?t+2
+        sta ?t2+1
+        stx ?t2+2
+        sta ?t3+1
+        stx ?t3+2
+        ldx #0
+et_s
+?entry  ldy #0
+?cmp
+?t      lda $FFFF,x            ; (table patched)
+        beq ?endt              ; entry ended
+        cmp ext_buf,y
+        bne ?skip
         inx
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'n'
-        bne ?no
-        inx
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'g'
-        bne ?no
-        inx
-        lda url_buffer,x
-        beq ?yes               ; null after "png" = match
-        jmp ?no
-?j      ; "jpg" or "jpeg"
-        inx
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'p'
-        bne ?no
-        inx
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'g'
-        bne ?je
-        inx
-        lda url_buffer,x
-        beq ?yes               ; null after "jpg" = match
-        jmp ?no
-?je     cmp #'e'               ; jpeg
-        bne ?no
-        inx
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'g'
-        bne ?no
-        inx
-        lda url_buffer,x
+        iny
+        bne ?cmp               ; always
+?endt   lda ext_buf,y          ; entry ended: match if the extension did too
         beq ?yes
-        jmp ?no
-?g      ; "gif"
+        inx                    ; past the entry's NUL
+        bne ?more              ; always
+?skip   inx                    ; skip the rest of this entry
+?t2     lda $FFFF,x            ; (table patched)
+        bne ?skip
         inx
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'i'
-        bne ?no
-        inx
-        lda url_buffer,x
-        jsr to_lower
-        cmp #'f'
-        bne ?no
-        inx
-        lda url_buffer,x
-        beq ?yes               ; null after "gif" = match
-?no     clc
+?more
+?t3     lda $FFFF,x            ; next entry, or 0 = end of list (patched)
+        bne ?entry
+et_e
+        clc
         rts
 ?yes    sec
         rts
+.endp
+
+; ----------------------------------------------------------------------------
+; http_check_img_ext - Check if url_buffer ends with image extension
+; Output: C=1 if image (.png, .jpg, .jpeg, .gif), C=0 if not
+; ----------------------------------------------------------------------------
+.proc http_check_img_ext
+        jsr url_ext
+        bcs ?no
+        lda #<img_ext_tbl
+        ldx #>img_ext_tbl
+        jmp ext_in_table
+?no     clc
+        rts
+img_ext_tbl
+        dta c'png',0
+        dta c'jpg',0
+        dta c'jpeg',0
+        dta c'gif',0
+        dta b(0)
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -403,57 +403,12 @@
 ; Output: C=1 if binary (pdf, doc, zip, etc.), C=0 if ok
 ; ----------------------------------------------------------------------------
 .proc http_check_binary_ext
-        ; Find last '.' in URL
-        ldy #0
-        ldx #$FF
-?scan   lda url_buffer,y
-        beq ?check
-        cmp #'.'
-        bne ?next
-        tya
-        tax
-?next   iny
-        bne ?scan
-?check  cpx #$FF
-        bne ?has_dot
-        clc
-        rts
-?has_dot
-        inx                    ; X = first char after dot
-        ; Store ext start position
-        stx zp_tmp1
-
-        ; Compare against blocked extensions table
-        ; Table format: null-terminated strings, double null = end
-        ldx #0
-?tloop  lda bin_ext_tbl,x
-        beq ?no                ; double null = end of table
-        ldy zp_tmp1           ; Y = url ext start
-?tcmp   lda bin_ext_tbl,x
-        beq ?tend              ; end of table entry
-        pha
-        lda url_buffer,y
-        jsr to_lower
-        sta zp_tmp2
-        pla
-        cmp zp_tmp2
-        bne ?tskip
-        inx
-        iny
-        jmp ?tcmp
-?tend   ; Table entry ended — check URL ext also ended
-        lda url_buffer,y
-        beq ?yes               ; both ended = match!
-?tskip  ; Skip to next entry (find next null)
-        lda bin_ext_tbl,x
-        beq ?tnxt
-        inx
-        jmp ?tskip
-?tnxt   inx                    ; skip the null
-        jmp ?tloop
+        jsr url_ext
+        bcs ?no
+        lda #<bin_ext_tbl
+        ldx #>bin_ext_tbl
+        jmp ext_in_table
 ?no     clc
-        rts
-?yes    sec
         rts
 
 bin_ext_tbl
@@ -486,6 +441,7 @@ bin_ext_tbl
         dta c'dmg',0
         dta c'swf',0
         dta b(0)               ; end of table
+        ert *-bin_ext_tbl>255
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -517,11 +473,20 @@ bin_ext_tbl
         beq ?done
         cmp #'/'
         beq ?done              ; reached path, stop lowercasing
+ .if 1                          ; 2026-09-23 (6502-idioms: to lower: the common lowercase byte (> 'Z') leaves on the
+                                ; first compare, 5 cycles instead of 9; same result for every byte)
+        cmp #'Z'+1
+        bcs ?next
+        cmp #'A'
+        bcc ?next
+        ora #$20
+ .else
         cmp #'A'
         bcc ?next
         cmp #'Z'+1
         bcs ?next
         ora #$20
+ .endif
         sta url_buffer,y
 ?next   iny
         bne ?lp
@@ -543,6 +508,22 @@ bin_ext_tbl
 .endp
 
 ; ----------------------------------------------------------------------------
+; byte_to_hex - A = byte -> A = high hex digit, X = low hex digit
+; ----------------------------------------------------------------------------
+.proc byte_to_hex
+        pha
+        and #$0F
+        jsr nibble_to_hex
+        tax
+        pla
+        lsr
+        lsr
+        lsr
+        lsr
+        jmp nibble_to_hex
+.endp
+
+; ----------------------------------------------------------------------------
 ; Proxy mode
 ; ----------------------------------------------------------------------------
 use_proxy  dta b(0)           ; 0=direct, 1=proxy
@@ -550,7 +531,7 @@ use_proxy  dta b(0)           ; 0=direct, 1=proxy
 ; ----------------------------------------------------------------------------
 ; http_apply_proxy - Wrap url_buffer with proxy prefix
 ; Only called when use_proxy=1. Strips N: and http:// from original URL,
-; builds: N:https://turiecfoto.sk/proxy.php?url= + bare_url
+; builds: N:https://turiecfoto.sk/cactus/proxy.php?url= + bare_url
 ; ----------------------------------------------------------------------------
 .proc http_apply_proxy
         lda use_proxy
@@ -559,6 +540,25 @@ use_proxy  dta b(0)           ; 0=direct, 1=proxy
 ?go
         ; Skip if URL already points to our server (proxy or search)
         ; Check for "turiecfoto" substring in first 60 chars
+ .if 1                          ; 2026-09-23 (6502-loops-tables-smc: index counting up to zero)
+        ldy #256-60
+?chk    lda url_buffer+60-256,y
+        beq ?ok                ; end of string, not found - proceed
+        cmp #'t'
+        bne ?cn
+        lda url_buffer+60-256+1,y
+        cmp #'u'
+        bne ?cn
+        lda url_buffer+60-256+2,y
+        cmp #'r'
+        bne ?cn
+        lda url_buffer+60-256+3,y
+        cmp #'i'
+        bne ?cn
+        rts                    ; "turi" found - our server, skip proxy
+?cn     iny
+        bne ?chk
+ .else
         ldy #0
 ?chk    lda url_buffer,y
         beq ?ok                ; end of string, not found - proceed
@@ -577,6 +577,7 @@ use_proxy  dta b(0)           ; 0=direct, 1=proxy
 ?cn     iny
         cpy #60
         bne ?chk
+ .endif
 ?ok
         ; Find start of bare URL (skip N: and http://)
         ldy #0
@@ -602,6 +603,17 @@ use_proxy  dta b(0)           ; 0=direct, 1=proxy
 
 ?bare   ; Y = start of bare URL in url_buffer
         ; Copy bare URL to rx_buffer (temp)
+ .if 1                          ; 2026-09-23 (6502-loops-tables-smc: index counting up to zero)
+        ldx #256-200
+?cp1    lda url_buffer,y
+        sta rx_buffer+200-256,x
+        beq ?cp1d
+        iny
+        inx
+        bne ?cp1
+        lda #0
+        sta rx_buffer+200
+ .else
         ldx #0
 ?cp1    lda url_buffer,y
         sta rx_buffer,x
@@ -612,6 +624,7 @@ use_proxy  dta b(0)           ; 0=direct, 1=proxy
         bne ?cp1
         lda #0
         sta rx_buffer,x
+ .endif
 ?cp1d
         ; Copy proxy prefix to url_buffer
         ldy #0
@@ -637,16 +650,26 @@ use_proxy  dta b(0)           ; 0=direct, 1=proxy
 
 .endp
 
-proxy_prefix dta c'N:https://turiecfoto.sk/proxy.php?url=',0
+proxy_prefix dta c'N:https://turiecfoto.sk/cactus/proxy.php?url=',0
 
 ; ----------------------------------------------------------------------------
 ; url_build_search - Convert search query in url_buffer to search URL
 ; Input: url_buffer = "search terms", url_length = length
-; Output: url_buffer = "turiecfoto.sk/search.php?q=search+terms"
-; Note: http_ensure_prefix will add "N:http://" later
+; Output: url_buffer = "N:https://turiecfoto.sk/cactus/search.php?q=search+terms"
+; (https: the server answers plain http with a 301 redirect)
 ; ----------------------------------------------------------------------------
 .proc url_build_search
         ; Copy query from url_buffer to rx_buffer (temp)
+ .if 1                          ; 2026-09-23 (6502-loops-tables-smc: index counting up to zero)
+        ldy #256-200
+?cp1    lda url_buffer+200-256,y
+        sta rx_buffer+200-256,y
+        beq ?cp1d
+        iny
+        bne ?cp1
+        lda #0
+        sta rx_buffer+200
+ .else
         ldy #0
 ?cp1    lda url_buffer,y
         sta rx_buffer,y
@@ -656,6 +679,7 @@ proxy_prefix dta c'N:https://turiecfoto.sk/proxy.php?url=',0
         bne ?cp1
         lda #0
         sta rx_buffer,y
+ .endif
 ?cp1d
         ; Copy search prefix to url_buffer
         ldy #0
@@ -683,7 +707,9 @@ proxy_prefix dta c'N:https://turiecfoto.sk/proxy.php?url=',0
         rts
 .endp
 
-search_prefix dta c'turiecfoto.sk/search.php?q=',0
+search_prefix dta c'N:https://'
+search_host   dta c'turiecfoto.sk/cactus/search.php?q=',0
+SEARCH_SCHEME = search_host - search_prefix      ; 10
 
 ; ----------------------------------------------------------------------------
 ; http_extract_frag - Extract #fragment from url_buffer
@@ -700,7 +726,7 @@ search_prefix dta c'turiecfoto.sk/search.php?q=',0
         beq ?found
         iny
         bne ?scan
-?done   rts
+?done   jmp update_emit_skip   ; skip_to_frag = 0
 ?found  ; Null-terminate URL at '#'
         lda #0
         sta url_buffer,y
@@ -719,5 +745,5 @@ search_prefix dta c'turiecfoto.sk/search.php?q=',0
         sta frag_buf,x         ; force null-terminate
 ?set    lda #1
         sta skip_to_frag
-        rts
+        jmp update_emit_skip
 .endp

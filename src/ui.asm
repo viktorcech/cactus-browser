@@ -18,13 +18,14 @@
         ldx #0
         jsr vbxe_setpos
         lda #COL_GREEN
-        jsr vbxe_setattr
+        sta zp_cur_attr
         lda #<m_urlp
         ldx #>m_urlp
         jsr vbxe_print
 
         lda #ATTR_NORMAL
-        jmp vbxe_setattr
+        sta zp_cur_attr
+        rts
 
 m_urlp  dta c'URL: ',0
 .endp
@@ -70,46 +71,28 @@ m_urlp  dta c'URL: ',0
         ; Key available — kbd_get returns immediately
         jsr kbd_get
 
-        cmp #'q'
-        beq ?quit
-        cmp #'Q'
-        beq ?quit
-        cmp #'u'
-        beq ?url_j
-        cmp #'U'
-        beq ?url_j
-        cmp #'b'
-        beq ?back_j
-        cmp #'B'
-        beq ?back_j
-        cmp #'p'
-        beq ?proxy_j
-        cmp #'P'
-        beq ?proxy_j
         cmp #ATASCII_TAB
         beq ?tab
         cmp #ATASCII_RET
         beq ?ret_key
         cmp #$02                ; Ctrl+B = bookmarks window
-        beq ?bkmark_j
+        jeq ?bkmark
         cmp #$06                ; Ctrl+F = find in page
-        beq ?find_j
+        jeq ?find
+        ora #$20                ; letters: case-fold once ('Q' -> 'q')
+        cmp #'q'
+        beq ?quit
+        cmp #'u'
+        jeq ?url
+        cmp #'b'
+        jeq ?back
+        cmp #'p'
+        jeq ?proxy
         cmp #'f'                ; 'f' alt for find
-        beq ?find_j
-        cmp #'F'
-        beq ?find_j
+        jeq ?find
         cmp #'i'                ; I = info / help screen
-        beq ?info_j
-        cmp #'I'
-        beq ?info_j
+        jeq ?info
         jmp ?loop
-
-?url_j    jmp ?url
-?back_j   jmp ?back
-?proxy_j  jmp ?proxy
-?bkmark_j jmp ?bkmark
-?info_j   jmp ?info
-?find_j   jmp ?find
 
 ?tab    jsr tab_next_link
         jmp ?loop
@@ -117,14 +100,14 @@ m_urlp  dta c'URL: ',0
 ?ret_key
         lda zp_tab_link
         cmp #$FF
-        beq ?rl
+        jeq ?loop              ; no TAB selection
         sta zp_cur_link
         lda #KEY_NONE
         sta CH
         jsr mouse_hide_cursor
         jsr ui_follow_link
         jsr ?chk_pending
-?rl     jmp ?loop
+        jmp ?loop
 
         ; Q = return to welcome screen
 ?quit   jsr mouse_hide_cursor
@@ -135,9 +118,7 @@ m_urlp  dta c'URL: ',0
 ?qi1    jsr html_reset
         jsr render_reset
         jsr show_welcome
-        lda #$FF
-        sta zp_mouse_prev_x
-        jmp ?loop
+        jmp ?redraw
 
 ?url    jsr mouse_hide_cursor
         jsr ui_init
@@ -147,26 +128,31 @@ m_urlp  dta c'URL: ',0
         jsr http_navigate
         jsr ?chk_pending
 ?url_done
-        lda #$FF
-        sta zp_mouse_prev_x
-        jmp ?loop
+        jmp ?redraw
 
 ?back   jsr mouse_hide_cursor
         jsr ui_init
         jsr history_pop
-        bcs ?back_done
+        bcs ?redraw
         jsr http_navigate
         jsr ?chk_pending
-?back_done
-        lda #$FF
+?redraw lda #$FF               ; screen redrawn: the cursor has no saved cell
         sta zp_mouse_prev_x
         jmp ?loop
 
 ?proxy  ; Toggle proxy mode and refresh welcome screen
+ .if 1                          ; 2026-09-23 (settings saved on disk)
+        lda use_proxy
+        eor #1
+        sta use_proxy
+        jsr set_save           ; D1: sector 715
+        jsr show_welcome
+ .else
         lda use_proxy
         eor #1
         sta use_proxy
         jsr show_welcome
+ .endif
         jmp ?loop
 
 ?bkmark jsr bk_screen
@@ -188,7 +174,7 @@ m_urlp  dta c'URL: ',0
         lda #$FF
         sta pending_link
         jsr ui_follow_link
-        jsr ?chk_pending       ; recursive: follow chain of pending links
+        jmp ?chk_pending       ; follow a chain of pending links (tail call)
 ?no_pend rts
 .endp
 
@@ -197,10 +183,14 @@ m_urlp  dta c'URL: ',0
 ; Output: url_buffer set, C=0 ok, C=1 cancelled
 ; ----------------------------------------------------------------------------
 .proc ui_url_input
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        status_msg COL_BLUE, m_urlhint
+ .else
         ; Clear status bar during URL input (keys don't apply here)
         lda #STATUS_ROW
         ldx #COL_BLACK
         jsr vbxe_fill_row
+ .endif
 
         lda #URL_ROW
         ldx #COL_GREEN
@@ -210,7 +200,7 @@ m_urlp  dta c'URL: ',0
         ldx #0
         jsr vbxe_setpos
         lda #COL_GREEN
-        jsr vbxe_setattr
+        sta zp_cur_attr
 
         lda #<m_go
         ldx #>m_go
@@ -230,11 +220,20 @@ m_urlp  dta c'URL: ',0
         ldy #0
 ?low    lda url_buffer,y
         beq ?lowd
+ .if 1                          ; 2026-09-23 (6502-idioms: to lower: the common lowercase byte (> 'Z') leaves on the
+                                ; first compare, 5 cycles instead of 9; same result for every byte)
+        cmp #'Z'+1
+        bcs ?lon
+        cmp #'A'
+        bcc ?lon
+        ora #$20
+ .else
         cmp #'A'
         bcc ?lon
         cmp #'Z'+1
         bcs ?lon
         ora #$20
+ .endif
         sta url_buffer,y
 ?lon    iny
         bne ?low
@@ -259,6 +258,9 @@ m_urlp  dta c'URL: ',0
         rts
 
 m_go    dta c'Go to: ',0
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_urlhint dta c' Type a URL, or words to search the web',1,c'Return  Go   Esc  Cancel',0
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -311,7 +313,11 @@ m_go    dta c'Go to: ',0
         ldx #>m_badlnk
         jmp ui_show_error
 
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_badlnk dta c' Invalid link number',1,c'any key',0
+ .else
 m_badlnk dta c'Invalid link number',0
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -325,12 +331,12 @@ m_badlnk dta c'Invalid link number',0
         ldx #0
         jsr vbxe_setpos
         lda #COL_GREEN
-        jsr vbxe_setattr
+        sta zp_cur_attr
         lda #<ui_init.m_urlp
         ldx #>ui_init.m_urlp
         jsr vbxe_print
         ; Check if URL starts with proxy prefix — if so, skip it
-        ; proxy_prefix = "N:https://turiecfoto.sk/proxy.php?url=" (38 chars)
+        ; proxy_prefix = "N:https://turiecfoto.sk/cactus/proxy.php?url=" (45 chars)
         ldy #0
 ?chk    lda proxy_prefix,y
         beq ?show_bare         ; end of prefix = full match, skip it
@@ -339,58 +345,78 @@ m_badlnk dta c'Invalid link number',0
         iny
         bne ?chk
 ?show_full
-        ; Check if URL starts with search prefix — show "Search: query" instead
+        ; Search URL? Show "Search: query" instead. The host part is checked
+        ; bare (typed before the prefix is added) and after "N:https://"
         ldy #0
-?chks   lda search_prefix,y
+?chks   lda search_host,y
         beq ?show_search           ; full match = search URL
         cmp url_buffer,y
-        bne ?chks2                 ; mismatch at url_buffer level
+        bne ?chks2
         iny
         bne ?chks
-?chks2  ; Also check after "N:http://" (9 chars) since ensure_prefix adds it
-        ldy #0
-?chks3  lda search_prefix,y
-        beq ?show_search9
-        cmp url_buffer+9,y
+?chks2  ldy #0
+?chks3  lda search_host,y
+        beq ?show_search10
+        cmp url_buffer+SEARCH_SCHEME,y
         bne ?not_search
         iny
         bne ?chks3
-?show_search9
+?show_search10
         tya
-        clc
-        adc #9                     ; skip "N:http://" + prefix
+        adc #SEARCH_SCHEME-1       ; C = 1 (cmp equal): skip "N:https://" too
         tay
-        jmp ?do_search
 ?show_search
         ; Y = length of search prefix
 ?do_search
         ; Print "Search: " then query (decode + back from url_buffer+Y)
         ; Save Y before vbxe_print (it clobbers Y)
-        sty zp_tmp1
+ .if 1                          ; 2026-09-23 (6502-loops-tables-smc: index counting up to zero,
+                                ; the patched operand carries the -(256-68) bias)
+        tya                        ; query source = url_buffer + Y + 68 - 256 (SMC)
+        clc
+        adc #<(url_buffer+68-256)
+        sta ?sq+1
+        lda #>(url_buffer+68-256)
+        adc #0
+        sta ?sq+2
         lda #<m_search
         ldx #>m_search
         jsr vbxe_print
         ; Print query from url_buffer+Y, converting '+' back to spaces
-        lda zp_tmp1
-        clc
-        adc #<url_buffer
-        sta zp_tmp_ptr
-        lda #0
-        adc #>url_buffer
-        sta zp_tmp_ptr+1
-        ldy #0
-?sq     lda (zp_tmp_ptr),y
+        ldx #256-68                ; max display width 68
+?sq     lda $FFFF,x                ; (patched: query start - 188)
         beq ?sqd
         cmp #'+'
         bne ?sqn
         lda #' '
-?sqn    sty zp_tmp1                ; save Y (vbxe_putchar clobbers it)
-        jsr vbxe_putchar
-        ldy zp_tmp1                ; restore Y
-        iny
-        cpy #68                    ; max display width
+?sqn    jsr vbxe_putchar           ; preserves X
+        inx
         bne ?sq
 ?sqd    rts
+ .else
+        tya                        ; query source = url_buffer + Y (SMC)
+        clc
+        adc #<url_buffer
+        sta ?sq+1
+        lda #>url_buffer
+        adc #0
+        sta ?sq+2
+        lda #<m_search
+        ldx #>m_search
+        jsr vbxe_print
+        ; Print query from url_buffer+Y, converting '+' back to spaces
+        ldx #0
+?sq     lda $FFFF,x                ; (patched: query start)
+        beq ?sqd
+        cmp #'+'
+        bne ?sqn
+        lda #' '
+?sqn    jsr vbxe_putchar           ; preserves X
+        inx
+        cpx #68                    ; max display width
+        bne ?sq
+?sqd    rts
+ .endif
 
 ?not_search
         ; Skip "N:" prefix if present
@@ -409,15 +435,13 @@ m_badlnk dta c'Invalid link number',0
         jmp vbxe_print
 ?show_bare
         ; Y = length of proxy prefix, print from url_buffer+Y
+        ldx #>url_buffer
         tya
         clc
         adc #<url_buffer
-        pha
-        lda #0
-        adc #>url_buffer
-        tax
-        pla
-        jmp vbxe_print
+        bcc ?sb
+        inx
+?sb     jmp vbxe_print
 
 m_search dta c'Search: ',0
 .endp
@@ -432,27 +456,12 @@ m_search dta c'Search: ',0
         ldx #0
         jsr vbxe_setpos
         lda #ATTR_HEADING
-        jsr vbxe_setattr
+        sta zp_cur_attr
         lda #<title_buf
         ldx #>title_buf
         jsr vbxe_print
         lda #ATTR_NORMAL
-        jmp vbxe_setattr
-.endp
-
-; ----------------------------------------------------------------------------
-; ui_clear_content - Clear rows 2-22
-; ----------------------------------------------------------------------------
-.proc ui_clear_content
-        ldx #CONTENT_TOP
-?lp     txa
-        pha
-        jsr vbxe_clear_row
-        pla
-        tax
-        inx
-        cpx #CONTENT_BOT+1
-        bne ?lp
+        sta zp_cur_attr
         rts
 .endp
 
@@ -461,9 +470,12 @@ m_search dta c'Search: ',0
 ; Waits for keypress, then restores status bar
 ; ----------------------------------------------------------------------------
 .proc ui_show_error
-        pha
-        txa
-        pha
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        ldy #COL_RED           ; red bar, message A/X ("..., 1, any key")
+        jsr status_msg_sub
+ .else
+        sta ?msg
+        stx ?msg+1
 
         lda #STATUS_ROW
         ldx #COL_RED
@@ -472,18 +484,18 @@ m_search dta c'Search: ',0
         ldx #0
         jsr vbxe_setpos
         lda #ATTR_ERROR
-        jsr vbxe_setattr
+        sta zp_cur_attr
 
         lda #<m_err
         ldx #>m_err
         jsr vbxe_print
 
-        pla
-        tax
-        pla
+        lda ?msg
+        ldx ?msg+1
         jsr vbxe_print
         lda #ATTR_NORMAL
-        jsr vbxe_setattr
+        sta zp_cur_attr
+ .endif
 
         jsr kbd_get
 
@@ -493,6 +505,7 @@ m_search dta c'Search: ',0
         jmp vbxe_fill_row
 
 m_err   dta c'ERROR: ',0
+?msg    dta a(0)
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -501,9 +514,19 @@ m_err   dta c'ERROR: ',0
 .proc ui_status_loading
         lda #$FF
         sta ui_status_progress.prog_last_kb
-        status_msg COL_YELLOW, m_load
-        rts
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        ldy #COL_YELLOW
+        lda #<m_load
+        ldx #>m_load
+        jmp status_msg_sub
+m_load  dta c' Loading...',1,c'Key  Stop',0
+ .else
+        ldy #COL_YELLOW
+        lda #<m_load
+        ldx #>m_load
+        jmp status_msg_sub
 m_load  dta c' Loading...',0
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -513,6 +536,33 @@ m_load  dta c' Loading...',0
 .proc ui_status_progress
         ; Convert bytes to KB (divide by 256 = just use high byte)
         ; Show update only when KB value changes (avoid flicker)
+ .if 1                          ; 2026-09-23 (fix: real kB from the 24-bit pb_total)
+        lda pb_total+1         ; kB = pb_total >> 10 (24-bit, <= 448):
+        sta ?kl                ; the old high byte of http_bytes counted
+        lda pb_total+2         ; 256-byte blocks and wrapped at 64 KB
+        lsr
+        ror ?kl
+        lsr
+        ror ?kl
+        sta ?kh
+        lda ?kl
+        cmp prog_last_kb
+        beq ?skip              ; same kB as last time, skip update
+        sta prog_last_kb
+
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        lda #STATUS_ROW        ; the bar from ui_status_loading stays:
+        ldx #PROG_COL          ; only the number is written (kB only grow)
+        jsr vbxe_setpos
+        jsr ?p16
+ .else
+        status_msg COL_YELLOW, m_prog
+
+        lda #COL_YELLOW
+        sta zp_cur_attr
+        jsr ?p16
+ .endif
+ .else
         lda http_bytes_hi
         cmp prog_last_kb
         beq ?skip              ; same KB as last time, skip update
@@ -522,71 +572,112 @@ m_load  dta c' Loading...',0
 
         ; Print KB number (0-255) — attr still yellow from fill_row
         lda #COL_YELLOW
-        jsr vbxe_setattr
+        sta zp_cur_attr
         lda prog_last_kb
         jsr ?print_num
+ .endif
 
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        lda #<m_kb
+        ldx #>m_kb
+        jsr sb_text
+?skip   rts
+ .else
         lda #<m_kb
         ldx #>m_kb
         jsr vbxe_print
 
         lda #ATTR_NORMAL
-        jsr vbxe_setattr
+        sta zp_cur_attr
 ?skip   rts
+ .endif
 
+ .if 1                          ; 2026-09-23 (fix: 16-bit kB, ends in ?tens / ?t_lp like ?print_num)
+?p16    ldx #'0'-1             ; hundreds digit of the 16-bit kB
+?h16    inx
+        lda ?kl
+        sec
+        sbc #100
+        sta ?kl
+        lda ?kh
+        sbc #0
+        sta ?kh
+        bcs ?h16
+        lda ?kl
+        adc #100               ; C = 0: undo the last subtraction, A < 100
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        cpx #'0'
+        beq ?no_h
+        pha                    ; hundreds digit, then both lower digits
+        txa
+        jsr sb_char
+        pla
+        ldx #'0'-1
+        sec
+?t16    inx
+        sbc #10
+        bcs ?t16
+        adc #10                ; C = 0
+        pha
+        txa
+        jsr sb_char
+        pla
+        ora #'0'
+        jmp sb_char
+?no_h   jmp sb_num             ; < 100
+ .else
+        cpx #'0'
+        beq ?no_h
+        jsr ?digit             ; print X, keep A
+        ldx #'0'-1
+        sec
+        bcs ?t_lp              ; always: with hundreds, tens always print
+?no_h   ldx #'0'-1
+        jmp ?tens
+ .endif
+ .endif
         ; Print 8-bit number in A as decimal (no leading zeros)
 ?print_num
-        ldx #0                 ; leading zero flag
-        ldy #0                 ; digit index
-
-        ; Hundreds
+        ldx #'0'-1             ; X = digit char (vbxe_putchar keeps X)
         cmp #100
         bcc ?tens
-        ldx #1                 ; got non-zero digit
-?h_lp   cmp #100
-        bcc ?h_done
+?h_lp   inx                    ; hundreds
         sbc #100
-        iny
-        jmp ?h_lp
-?h_done pha
-        tya
-        clc
-        adc #'0'
-        jsr vbxe_putchar
-        pla
-        ldy #0
-
-        ; Tens
+        bcs ?h_lp
+        adc #100               ; C = 0: undo the last subtraction
+        jsr ?digit
+        ldx #'0'-1
+        sec
+        bcs ?t_lp              ; always: with hundreds, tens always print
 ?tens   cmp #10
-        bcc ?ones
-        ldx #1
-?t_lp   cmp #10
-        bcc ?t_done
+        bcc ?one
+?t_lp   inx
         sbc #10
-        iny
-        jmp ?t_lp
-?t_done pha
-        tya
-        clc
-        adc #'0'
-        jsr vbxe_putchar
-        pla
-        jmp ?do_ones
-
-        ; Ones (always print)
-?ones   cpx #0
-        beq ?do_ones
-        pha
-        lda #'0'
-        jsr vbxe_putchar
-        pla
-?do_ones clc
-        adc #'0'
+        bcs ?t_lp
+        adc #10
+        jsr ?digit
+?one    ora #'0'
         jmp vbxe_putchar
+?digit  sta ?rest              ; print X, keep A
+        txa
+        jsr vbxe_putchar
+        lda ?rest
+        rts
+?rest   dta 0
 
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_prog  dta c' Loading... ',1,c'Key  Stop',0
+m_kb    dta c' kB',0
+PROG_COL = 12                  ; after " Loading... " (m_load + space)
+ .else
 m_prog  dta c' Loading... ',0
 m_kb    dta c'kB',0
+ .endif
 prog_last_kb dta b($FF)
+ .if 1
+?kl     dta 0
+?kh     dta 0
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -598,32 +689,47 @@ prog_last_kb dta b($FF)
         ldx #COL_BLACK
         jsr vbxe_fill_row
         lda title_len
-        beq ?no
-        jsr ui_show_title
-?no     rts
+        jne ui_show_title
+        rts
 .endp
 
 ; ----------------------------------------------------------------------------
 ; ui_status_end - Show end-of-page indicator on status bar
 ; ----------------------------------------------------------------------------
 .proc ui_status_end
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        status_msg COL_BLUE, m_end
+ .else
         status_msg COL_YELLOW, m_end
+ .endif
         lda title_len
-        beq ?no
-        jsr ui_show_title
-?no     rts
+        jne ui_show_title
+        rts
 
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_end   dta c' End of page',1,c'U  URL   B  Back   Q  Quit',0
+ .else
 m_end   dta c' -- End -- Q:Quit U:URL B:Back',0
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
 ; ui_status_error
 ; ----------------------------------------------------------------------------
 .proc ui_status_error
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        ldy #COL_RED
+        lda #<m_stop
+        ldx #>m_stop
+        jmp status_msg_sub
+m_stop  dta c' Stopped',0
+.endp
+ .else
         lda #STATUS_ROW
         ldx #COL_RED
         jmp vbxe_fill_row
 .endp
+ .endif
 
 ; ----------------------------------------------------------------------------
 ; tab_next_link - Cycle to next link via TAB key

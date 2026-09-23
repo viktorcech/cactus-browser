@@ -8,6 +8,7 @@ current_tag_id dta 0
 ; ============================================================================
 ; process_tag - Handle parsed tag via jump table dispatch
 ; ============================================================================
+        .align $100            ; tag dispatch in one page
 .proc process_tag
         jsr lookup_tag
         sta current_tag_id
@@ -25,7 +26,7 @@ current_tag_id dta 0
 ?ret    rts
 ?cls    lda #0
         sta zp_in_skip
-        rts
+        jmp update_emit_skip
 
 ?not_skip
         ; In <head> mode - only process head-related tags
@@ -48,11 +49,13 @@ current_tag_id dta 0
         ; Known content tag (p, div, h1...) - page has no <body>
         lda #0
         sta zp_in_head
+        jsr update_emit_skip
+        lda current_tag_id
 
-?dispatch
-        ldx current_tag_id
+?dispatch                      ; A = tag id
+        tax
         lda is_closing
-        bne ?close
+        bne ?close             ; (flags are 0/1)
         ; --- Open tag dispatch ---
         lda otbl_hi,x
         sta zp_tmp_ptr+1
@@ -277,21 +280,20 @@ ctbl_hi dta >nop_tag           ; 0  UNKNOWN
         jsr render_flush_word
         lda #1
         sta in_title
-        rts
+        jmp update_emit_skip
 .endp
 
 .proc open_skip
         lda #1
         sta zp_in_skip
-        rts
+        jmp update_emit_skip
 .endp
 
 .proc open_img
         jsr render_flush_word
         lda img_src_len
-        beq ?nourl
-        jsr store_img_as_link
-?nourl  rts
+        jne store_img_as_link
+        rts
 .endp
 
 .proc open_hr
@@ -304,15 +306,14 @@ ctbl_hi dta >nop_tag           ; 0  UNKNOWN
 .proc open_div
         jsr render_flush_word
         lda zp_render_col
-        beq ?skip
-        jmp render_do_nl
-?skip   rts
+        jne render_do_nl
+        rts
 .endp
 
 .proc open_head
         lda #1
         sta zp_in_head
-        rts
+        jmp update_emit_skip
 .endp
 
 .proc open_body
@@ -320,7 +321,7 @@ ctbl_hi dta >nop_tag           ; 0  UNKNOWN
         sta zp_in_head
         sta http_bytes_lo
         sta http_bytes_hi
-        rts
+        jmp update_emit_skip
 .endp
 
 open_underline
@@ -331,7 +332,8 @@ open_sup
         .byte $2C              ; BIT abs - skip next 2 bytes
 open_sub
         lda #ATTR_SUB
-        jmp render_set_attr
+        sta zp_cur_attr        ; = render_set_attr
+        rts
 
 ; --- Table state ---
 ; Tables use simple " | " cell separators with horizontal rule borders.
@@ -365,8 +367,7 @@ tbl_had_th     dta 0              ; 1 = row had <th> (draw separator line after)
         lda #0
         sta tbl_had_th
 ?no_sep
-?first  lda #0
-        sta td_count
+?first  sta td_count           ; A = 0 on every path here
         rts
 .endp
 
@@ -392,7 +393,8 @@ tbl_had_th     dta 0              ; 1 = row had <th> (draw separator line after)
         lda #1
         sta tbl_had_th
         lda #ATTR_H3
-        jmp render_set_attr
+        sta zp_cur_attr
+        rts
 .endp
 
 m_tbl_sep dta c' | ',0
@@ -411,14 +413,16 @@ m_tbl_sep dta c' | ',0
         jsr render_flush_word
         jsr render_newline
         lda #ATTR_H3
-        jmp render_set_attr
+        sta zp_cur_attr
+        rts
 .endp
 
 open_dd = open_bq
 
 .proc open_code
         lda #ATTR_DECOR
-        jmp render_set_attr
+        sta zp_cur_attr
+        rts
 .endp
 
 .proc open_pre
@@ -427,7 +431,8 @@ open_dd = open_bq
         lda #1
         sta in_pre
         lda #ATTR_DECOR
-        jmp render_set_attr
+        sta zp_cur_attr        ; = render_set_attr
+        jmp update_emit_skip   ; in_pre is part of emit_slow
 .endp
 
 ; ============================================================================
@@ -439,14 +444,14 @@ open_dd = open_bq
         sta in_title
         ldx title_len
         sta title_buf,x
-        rts
+        jmp update_emit_skip
 .endp
 
 .proc close_skip
         lda #0                 ; PS_NORMAL = 0
         sta zp_in_skip
         sta zp_parse_state
-        rts
+        jmp update_emit_skip
 .endp
 
 close_div = open_div
@@ -454,7 +459,7 @@ close_div = open_div
 .proc close_head
         lda #0
         sta zp_in_head
-        rts
+        jmp update_emit_skip
 .endp
 
 .proc close_table
@@ -473,24 +478,10 @@ close_tr = close_italic        ; reset attr to ATTR_NORMAL after TH row
 .proc close_bq
         jsr render_flush_word
         jsr render_newline
-        lda zp_indent
-        sec
-        sbc #2
-        bcs ?ok
-        lda #0
-?ok     sta zp_indent
-        rts
+        jmp close_list         ; indent -= 2
 .endp
 
-.proc close_dd
-        lda zp_indent
-        sec
-        sbc #2
-        bcs ?ok
-        lda #0
-?ok     sta zp_indent
-        rts
-.endp
+close_dd = close_list
 
 .proc close_pre
         jsr render_flush_word
@@ -498,7 +489,8 @@ close_tr = close_italic        ; reset attr to ATTR_NORMAL after TH row
         lda #0
         sta in_pre
         lda #ATTR_NORMAL
-        jmp render_set_attr
+        sta zp_cur_attr        ; = render_set_attr
+        jmp update_emit_skip
 .endp
 
 ; ============================================================================
@@ -507,32 +499,19 @@ close_tr = close_italic        ; reset attr to ATTR_NORMAL after TH row
 .proc open_heading
         lda #0
         sta skip_to_heading
+        jsr update_emit_skip
         jsr render_flush_word
         jsr render_newline
         jsr render_newline         ; blank line above heading
-        lda current_tag_id
-        cmp #TAG_H1
-        beq ?h1
-        cmp #TAG_H2
-        beq ?h2
+        lda current_tag_id     ; H1-H3 = 1-3, H4-H6 = 35-37 -> 4-6
         cmp #TAG_H4
-        beq ?h4
-        cmp #TAG_H5
-        beq ?h5
-        cmp #TAG_H6
-        beq ?h6
-        lda #ATTR_H3
-        .byte $2C              ; BIT abs - skip next 2 bytes
-?h1     lda #ATTR_H1
-        .byte $2C
-?h2     lda #ATTR_H2
-        .byte $2C
-?h4     lda #ATTR_H4
-        .byte $2C
-?h5     lda #ATTR_H5
-        .byte $2C
-?h6     lda #ATTR_H6
-        jmp render_set_attr
+        bcc ?t
+        sbc #TAG_H4-4          ; C = 1
+?t      tax
+        lda ?attr-1,x
+        sta zp_cur_attr
+        rts
+?attr   dta ATTR_H1, ATTR_H2, ATTR_H3, ATTR_H4, ATTR_H5, ATTR_H6
 .endp
 
 .proc open_para
@@ -546,40 +525,29 @@ close_tr = close_italic        ; reset attr to ATTR_NORMAL after TH row
         sta zp_in_link
         lda zp_link_num
         cmp #MAX_LINKS
-        bcc ?in_range
-        lda #MAX_LINKS-1       ; cap at 63 = last blue palette slot
-?in_range
-        clc
-        adc #ATTR_LINK_BASE    ; attr = $20 + link_num
-        jsr render_set_attr
-        lda zp_link_num
-        cmp #MAX_LINKS
-        bcs ?no_inc            ; don't increment past MAX_LINKS
+        bcs ?cap               ; don't increment past MAX_LINKS
         inc zp_link_num
-?no_inc rts
-.endp
-
-.proc open_ul
-        lda #0
-        sta zp_list_type
-        lda zp_indent
-        clc
-        adc #2
-        sta zp_indent
+        adc #ATTR_LINK_BASE    ; C = 0: attr = $20 + link_num
+        sta zp_cur_attr        ; = render_set_attr
+        rts
+?cap    lda #ATTR_LINK_BASE+MAX_LINKS-1   ; last blue palette slot
+        sta zp_cur_attr
         rts
 .endp
 
 .proc open_ol
-        lda #1
-        sta zp_list_type
         lda #0
         sta zp_list_item
+        lda #1                 ; numbered
+        .byte $2C              ; bit abs: skip the lda #0
+.endp
+open_ul lda #0                 ; bullets
+        sta zp_list_type
         lda zp_indent
         clc
         adc #2
         sta zp_indent
         rts
-.endp
 
 .proc open_li
         jsr render_flush_word
@@ -591,13 +559,14 @@ open_bold = nop_tag
 
 .proc open_italic
         lda #ATTR_DECOR
-        jmp render_set_attr
+        sta zp_cur_attr
+        rts
 .endp
 
 .proc close_heading
         jsr render_flush_word
         lda #ATTR_NORMAL
-        jsr render_set_attr
+        sta zp_cur_attr
         jmp render_newline
 .endp
 
@@ -608,7 +577,8 @@ close_para = open_para
         lda #0
         sta zp_in_link
         lda #ATTR_NORMAL
-        jmp render_set_attr
+        sta zp_cur_attr
+        rts
 .endp
 
 .proc close_list
@@ -625,7 +595,8 @@ close_bold = nop_tag
 
 .proc close_italic
         lda #ATTR_NORMAL
-        jmp render_set_attr
+        sta zp_cur_attr
+        rts
 .endp
 
 ; Aliases for identical close handlers (reset attr to normal)
@@ -636,6 +607,10 @@ close_code = close_italic
 ; ============================================================================
 ; process_attr
 ; ============================================================================
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: the "href" test and its branches to ?chk_src
+                                ; in one page)
+        page_fit 0, process_attr.chk_src-process_attr+1
+ .endif
 .proc process_attr
         ; Check "href" attribute (for <a> tags)
         lda attr_name_buf
@@ -649,10 +624,10 @@ close_code = close_italic
         bne ?chk_src
         lda attr_name_buf+3
         cmp #'f'
-        bne ?chk_src
-        jmp store_link_url
+        jeq store_link_url
 
 ?chk_src
+chk_src
         ; Check "src" attribute (for <img> tags)
         ; Must match exactly "src" (not "srcset" etc.)
         lda attr_name_buf
@@ -665,9 +640,7 @@ close_code = close_italic
         cmp #'c'
         bne ?chk_id
         lda attr_name_buf+3
-        bne ?chk_id            ; must be null (reject "srcset")
-        jsr store_img_src
-        rts
+        jeq store_img_src      ; must be null (reject "srcset")
 
 ?chk_id ; Check "id" attribute (for fragment anchors)
         lda skip_to_frag
@@ -679,8 +652,7 @@ close_code = close_italic
         cmp #'d'
         bne ?chk_name
         lda attr_name_buf+2
-        bne ?chk_name          ; must be exactly "id"
-        jmp check_frag_match
+        jeq check_frag_match   ; must be exactly "id"
 
 ?chk_name
         ; Check "name" attribute (for fragment anchors)
@@ -697,8 +669,7 @@ close_code = close_italic
         cmp #'e'
         bne ?done
         lda attr_name_buf+4
-        bne ?done              ; must be exactly "name"
-        jmp check_frag_match
+        jeq check_frag_match   ; must be exactly "name"
 
 ?done   rts
 .endp
@@ -720,6 +691,7 @@ close_code = close_italic
         rts                    ; too long, no match
 ?match  lda #0
         sta skip_to_frag       ; Fragment target found!
+        jmp update_emit_skip
 ?done   rts
 .endp
 
@@ -738,8 +710,7 @@ LINK_URL_SIZE  = 128
         lsr
         tax
         lda #0
-        ror
-        clc
+        ror                    ; A = (index & 1) << 7, C = 0
         adc #<link_urls
         sta zp_tmp_ptr
         txa
@@ -752,9 +723,7 @@ LINK_URL_SIZE  = 128
         lda zp_link_num
         cmp #MAX_LINKS
         bcs ?full
-
-        lda zp_link_num
-        jsr calc_link_addr
+        jsr calc_link_addr     ; A = link_num still
 
         ldy #0
 ?cp     lda attr_val_buf,y
@@ -799,9 +768,7 @@ IMG_SRC_SIZE = 256
         lda zp_link_num
         cmp #MAX_LINKS
         bcs ?full
-
-        lda zp_link_num
-        jsr calc_link_addr
+        jsr calc_link_addr     ; A = link_num still
 
         ; Write "I:" prefix
         lda #'I'
@@ -828,12 +795,12 @@ IMG_SRC_SIZE = 256
         lda zp_link_num
         clc
         adc #ATTR_LINK_BASE
-        jsr render_set_attr
+        sta zp_cur_attr            ; = render_set_attr
         lda #<m_imgtxt
         ldx #>m_imgtxt
         jsr render_string          ; shows "IMG"
         lda #ATTR_NORMAL
-        jsr render_set_attr
+        sta zp_cur_attr
         inc zp_link_num
 ?full   rts
 

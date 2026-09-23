@@ -15,9 +15,7 @@
         jsr ui_status_loading
         jsr vbxe_pb_init_write
         jsr fn_open
-        bcc ?opened
-        jmp ?open_err
-?opened
+        jcs ?open_err
         lda #1
         sta dl_active
         lda #0
@@ -35,92 +33,118 @@
         bne ?do_read
 
         jsr fn_status
-        bcc ?st_ok
-        jmp ?rd_err
-?st_ok
+        jcs ?rd_err
         lda zp_fn_error
         beq ?no_err
         cmp #136               ; 136 ($88) = EOF (FujiNet convention: server closed)
-        beq ?jdone
-        bmi ?jrd_err
-        jmp ?no_err
-?jdone  jmp ?done
-?jrd_err jmp ?rd_err
+        jeq ?done
+        jmi ?rd_err
 ?no_err
         lda zp_fn_bytes_lo
         ora zp_fn_bytes_hi
-        bne ?has_data
-        jmp ?no_data
-?has_data
-        lda zp_fn_bytes_lo
+        jeq ?no_data
+        lda zp_fn_bytes_lo     ; remain = bytes waiting (already in zp_fn_bytes)
         sta http_remain_lo
         lda zp_fn_bytes_hi
         sta http_remain_hi
+        jmp ?rd_go
 
 ?do_read
-        lda #0
-        sta http_idle_cnt
         lda http_remain_lo
         sta zp_fn_bytes_lo
         lda http_remain_hi
         sta zp_fn_bytes_hi
+?rd_go  lda #0
+        sta http_idle_cnt
 
-        jsr fn_read
+        ; Read up to 2KB per SIO call into img_big_buf (8x fewer SIO
+        ; transactions than the old 255-byte fn_read path — same routine
+        ; the image fetcher uses; page download and image fetch never
+        ; run concurrently, so sharing img_big_buf is safe)
+        jsr fn_read_img
         bcc ?rd_ok
         lda #0
         sta http_remain_lo
         sta http_remain_hi
         jmp ?rd_err
 ?rd_ok
+        ; remain -= chunk (16-bit)
         lda http_remain_lo
         sec
-        sbc zp_rx_len
+        sbc img_chunk_lo
         sta http_remain_lo
-        bcs ?no_borrow
-        dec http_remain_hi
-?no_borrow
+        lda http_remain_hi
+        sbc img_chunk_hi
+        sta http_remain_hi
 
-        lda zp_rx_len
-        beq ?rdlp
-
-        ; Track bytes for progress display
+        lda img_chunk_lo
+        ora img_chunk_hi
+        jeq ?rdlp
+        ; Track bytes for progress display (16-bit add)
         lda http_bytes_lo
         clc
-        adc zp_rx_len
+        adc img_chunk_lo
         sta http_bytes_lo
-        bcc ?no_ov
-        inc http_bytes_hi
-?no_ov  jsr ui_status_progress
+        lda http_bytes_hi
+        adc img_chunk_hi
+        sta http_bytes_hi
+ .if 1                          ; 2026-09-23 (fix: progress after pb_total is updated)
+        ; Write img_big_buf → VRAM page buffer (fast block copy)
+        jsr vbxe_pb_write_big
 
-        ; Write rx_buffer → VRAM page buffer
-        jsr vbxe_pb_write_chunk
-
-        ; Update 24-bit total
+        ; Update 24-bit total (img_chunk preserved by vbxe_pb_write_big)
         clc
         lda pb_total
-        adc zp_rx_len
+        adc img_chunk_lo
         sta pb_total
+        lda pb_total+1
+        adc img_chunk_hi
+        sta pb_total+1
         bcc ?nc_t
-        inc pb_total+1
-        bne ?nc_t
         inc pb_total+2
 ?nc_t
+        jsr ui_status_progress ; shows pb_total in kB
+ .else
+        jsr ui_status_progress
+
+        ; Write img_big_buf → VRAM page buffer (fast block copy)
+        jsr vbxe_pb_write_big
+
+        ; Update 24-bit total (img_chunk preserved by vbxe_pb_write_big)
+        clc
+        lda pb_total
+        adc img_chunk_lo
+        sta pb_total
+        lda pb_total+1
+        adc img_chunk_hi
+        sta pb_total+1
+        bcc ?nc_t
+        inc pb_total+2
+?nc_t
+ .endif
+ .if 1                          ; 2026-09-23 (fix: page buffer overran VRAM into bank 0)
+        ; 384 kB download limit (pb_total+2 >= 6): the page buffer starts at
+        ; VRAM $14000, so the last 2 KB chunk ends by $74800 < $80000. At 7
+        ; a page over ~432 kB wrapped into bank 0 (screen, BCBs, XDL, font)
+        lda pb_total+2
+        cmp #6
+        bcs ?done
+ .else
         ; 400kB download limit (pb_total+2 >= 6 = 384kB+)
         lda pb_total+2
         cmp #7
         bcs ?done
+ .endif
 
-        ; Check keyboard abort
+        ; Check keyboard abort: Space/Return are only cleared, any other
+        ; key stops the download
         lda CH
         cmp #KEY_NONE
-        bne ?chk_key
-        jmp ?rdlp
-?chk_key
+        jeq ?rdlp
         cmp #KEY_SPACE
         beq ?clr_dl
         cmp #KEY_RETURN
-        beq ?clr_dl
-        jmp ?done              ; any other key = stop download
+        bne ?done
 ?clr_dl lda #KEY_NONE
         sta CH
         jmp ?rdlp
@@ -135,8 +159,7 @@
         cmp #KEY_SPACE
         beq ?clr_sp
         cmp #KEY_RETURN
-        beq ?clr_sp
-        jmp ?done
+        bne ?done
 ?clr_sp lda #KEY_NONE
         sta CH
 ?no_key
@@ -145,22 +168,21 @@
         ldx is_pal
         bne ?pal_to
         cmp #250               ; NTSC: 250 frames ≈ 4.2s (longer for buffered download)
-        bcs ?done
         bcc ?wait
+        bcs ?done              ; always
 ?pal_to cmp #240               ; PAL: 240 frames ≈ 4.8s
         bcs ?done
 
 ?wait   wait_frames 1
-        jmp ?rdlp
+        jeq ?rdlp              ; always (wait_frames returns Z = 1)
 
 ?done   jsr fn_close
         lda #0
         sta dl_active
         ; Check if user clicked IMG during download
-        lda img_deferred
+        ldx img_deferred
         beq ?no_defer
-        lda #0
-        sta img_deferred
+        sta img_deferred       ; A = 0
         lda #KEY_NONE
         sta CH                 ; clear auto-repeat from --More--
         jsr img_fetch_single
@@ -169,42 +191,38 @@
         rts
 
 ?open_err
-        jsr fn_close
-        lda #0
-        sta dl_active
-        jsr ui_status_error
+        jsr ?stop
         lda #<m_operr
         ldx #>m_operr
-        jsr ui_show_error
-        sec
-        rts
+        bne ?show              ; always (hi byte != 0)
 
 ?rd_err lda zp_fn_error
         sta m_rderr_code
-        jsr fn_close
-        lda #0
-        sta dl_active
-        jsr ui_status_error
+        jsr ?stop
         lda m_rderr_code
-        lsr
-        lsr
-        lsr
-        lsr
-        jsr nibble_to_hex
+        jsr byte_to_hex
         sta m_rderr_hex
-        lda m_rderr_code
-        and #$0F
-        jsr nibble_to_hex
-        sta m_rderr_hex+1
+        stx m_rderr_hex+1
         lda #<m_rderr
         ldx #>m_rderr
-        jsr ui_show_error
+?show   jsr ui_show_error
         sec
         rts
 
+?stop   jsr fn_close           ; close N1:, red status bar
+        lda #0
+        sta dl_active
+        jmp ui_status_error
+
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_operr dta c' Connection failed - check the URL',1,c'any key',0
+m_rderr dta c' Read error $'
+m_rderr_hex dta c'00',1,c'any key',0
+ .else
 m_operr dta c'Connection failed - check URL (press key)',0
 m_rderr dta c'Read err $'
 m_rderr_hex dta c'00',0
+ .endif
 m_rderr_code dta b(0)
 http_idle_cnt dta b(0)
 .endp
@@ -238,41 +256,28 @@ img_deferred dta b(0)
 .proc http_render
         jsr vbxe_pb_init_read
 
-?loop   ; Check if all data read: pb_read == pb_total?
-        lda pb_read+2
-        cmp pb_total+2
-        bne ?more
-        lda pb_read+1
-        cmp pb_total+1
-        bne ?more
-        lda pb_read
-        cmp pb_total
-        beq ?done
-
-?more   ; Determine chunk size: min(255, bytes_left)
-        ; 24-bit subtraction: remaining = pb_total - pb_read
+?loop   ; remaining = pb_total - pb_read (24-bit): 0 = done,
+        ; chunk size = min(255, remaining)
         lda pb_total
         sec
         sbc pb_read
-        pha                    ; save low byte of remaining
+        tay                    ; Y = low byte of remaining
         lda pb_total+1
         sbc pb_read+1
-        tax                    ; X = middle byte of remaining
+        tax                    ; X = middle byte
         lda pb_total+2
-        sbc pb_read+2          ; A = high byte of remaining
-        ; If high or middle byte > 0, remaining > 255 -> cap at 255
-        bne ?full              ; high byte > 0
+        sbc pb_read+2
+        bne ?full              ; remaining > 255 -> cap at 255
         txa
-        bne ?full              ; middle byte > 0
-        ; Remaining fits in low byte (0-255)
-        pla                    ; A = exact remaining count
-        jmp ?read
-
-?full   pla                    ; discard saved low byte
-        lda #255               ; cap at 255
+        bne ?full
+        tya                    ; exact remaining count
+        beq ?done              ; all read
+        bne ?read              ; always
+?full   lda #255               ; cap at 255
 
 ?read   ; Save VRAM read state before chunk (for rewind after img_fetch)
         sta pb_chunk_size
+        tax
         lda pb_rd_bank
         sta pb_rd_save_bank
         lda zp_pb_rd_ptr
@@ -280,7 +285,7 @@ img_deferred dta b(0)
         lda zp_pb_rd_ptr+1
         sta pb_rd_save_hi
 
-        lda pb_chunk_size
+        txa                    ; = pb_chunk_size
         jsr vbxe_pb_read_chunk ; A→rx_buffer, sets zp_rx_len
         jsr html_process_chunk
 
@@ -296,8 +301,7 @@ img_deferred dta b(0)
         inc pb_read+2
 ?nc1
         lda page_abort
-        bne ?done
-        jmp ?loop
+        jeq ?loop
 
 ?done   jmp html_flush
 
@@ -345,9 +349,32 @@ pb_rd_save_hi    dta b(0)
         ; Check for unsupported binary file types
         jsr http_check_binary_ext
         bcc ?not_bin
-        status_msg COL_RED, m_unsupported
-        rts
+        ldy #COL_RED
+        lda #<m_unsupported
+        ldx #>m_unsupported
+        jmp status_msg_sub
 ?not_bin
+        ; Snapshot clean URL (pre-proxy, without N: prefix) for the
+        ; bookmarks window 'A' = add current page
+        ldy #0
+        lda url_buffer
+        cmp #'n'               ; http_url_tolower already ran
+        bne ?cu_nb
+        lda url_buffer+1
+        cmp #':'
+        bne ?cu_nb
+        ldy #2                 ; skip "n:" prefix
+?cu_nb  ldx #0
+?cu_cp  lda url_buffer,y
+        sta cur_page_url,x
+        beq ?cu_d
+        iny
+        inx
+        cpx #BK_SLOT_SZ-1
+        bne ?cu_cp
+        lda #0
+        sta cur_page_url,x
+?cu_d
         jsr http_apply_proxy
         ; Hide previous image if active
         lda img_active
@@ -370,7 +397,7 @@ pb_rd_save_hi    dta b(0)
         lda #<m_nodata
         ldx #>m_nodata
         jsr ui_show_error
-        jmp ?skip_render
+        jmp ui_status_end
 
 ?has_data
         lda #0
@@ -392,6 +419,11 @@ pb_rd_save_hi    dta b(0)
 ?skip_render
         jmp ui_status_end
 
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_nodata dta c' Empty response - check the URL',1,c'any key',0
+m_unsupported dta c' File type not supported',0
+ .else
 m_nodata dta c'Empty response - check URL (press key)',0
 m_unsupported dta c'File type not supported (press key)',0
+ .endif
 .endp

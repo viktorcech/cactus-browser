@@ -18,6 +18,7 @@ find_count       = $0531          ; number of VIEWPORT matches (highlighted)
 find_total       = $0532          ; total matches in full page buffer (counted only)
 find_mpos        = $0533          ; full-scan: partial match position
 find_intag       = $0534          ; full-scan: inside HTML tag flag
+find_fold        = $0540          ; 16 B search string, case-folded
 
 ; Saved attributes — packed linearly as matches are processed.
 ; For match i we save find_len bytes, running total <= FIND_MAX_MATCH*FIND_MAX_LEN = 256.
@@ -27,6 +28,13 @@ find_saved       = $0700          ; 256 B in page 7
 ; find_start - Entry point (called from Ctrl+F dispatch)
 ; ----------------------------------------------------------------------------
 .proc find_start
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        status_msg COL_GREEN, m_prompt
+        lda #COL_GREEN         ; typed text: inverse, in the bar
+        sta zp_cur_attr
+        lda #$80
+        sta kgl_inv
+ .else
         ; "Find: " prompt on status bar
         lda #STATUS_ROW
         ldx #COL_GREEN
@@ -35,10 +43,11 @@ find_saved       = $0700          ; 256 B in page 7
         ldx #0
         jsr vbxe_setpos
         lda #COL_GREEN
-        jsr vbxe_setattr
+        sta zp_cur_attr
         lda #<m_prompt
         ldx #>m_prompt
         jsr vbxe_print
+ .endif
 
         ; Read into find_buf
         lda #<find_buf
@@ -49,7 +58,7 @@ find_saved       = $0700          ; 256 B in page 7
         jsr kbd_get_line
         bcs ?bail                   ; ESC
         sty find_len
-        cpy #0
+        tya
         beq ?bail                   ; empty
 
         jsr find_scan
@@ -61,6 +70,19 @@ find_saved       = $0700          ; 256 B in page 7
 
 ?have   jsr find_highlight
         jsr find_scan_full          ; count total matches in whole page
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        status_msg COL_GREEN, m_found
+        lda find_count
+        jsr sb_num
+        lda #<m_visible
+        ldx #>m_visible
+        jsr sb_text
+        lda find_total
+        jsr sb_num
+        lda #<m_total
+        ldx #>m_total
+        jsr sb_text
+ .else
         status_msg COL_YELLOW, m_found
         lda find_count
         jsr find_print_num
@@ -72,6 +94,7 @@ find_saved       = $0700          ; 256 B in page 7
         lda #<m_total
         ldx #>m_total
         jsr vbxe_print
+ .endif
         jsr kbd_get
         jsr find_restore
         jmp ui_status_end
@@ -83,73 +106,77 @@ find_saved       = $0700          ; 256 B in page 7
 ; find_scan - Scan content rows for find_buf. Populates match arrays.
 ; Case-insensitive for ASCII letters (ORA #$20).
 ; ----------------------------------------------------------------------------
+        page_fit find_scan.col_loop-find_scan, find_scan.col_end-find_scan.col_loop
 .proc find_scan
         lda #0
         sta find_count
+        ; Case-folded copy of the search string (compared as is below)
+        ldx find_len
+?fold   lda find_buf-1,x
+        ora #$20
+        sta find_fold-1,x
+        dex
+        bne ?fold
+        ; Last start offset: col + len <= 80  ->  Y <= 2 * (80 - len)
+        lda #SCR_COLS
+        sec
+        sbc find_len
+        asl
+        adc #2                 ; C = 0 (len >= 1): loop while Y < 2*(80-len)+2
+        sta ?lim+1
 
         memb_on 0
 
         ldx #CONTENT_TOP
-?rowlp  stx ?row
+?rowlp  stx zp_tmp2            ; row
         lda row_addr_lo,x
         sta zp_scr_ptr
         lda row_addr_hi,x
         sta zp_scr_ptr+1
 
-        ldy #0                      ; Y = char-byte offset within row (0,2,4,...)
-?collp  ; Check col + find_len <= 80
-        tya
-        lsr                         ; col = Y/2
-        clc
-        adc find_len
-        cmp #SCR_COLS+1
-        bcs ?next_row
-
-        sty ?startY
-        ldx #0                      ; index into find_buf
-?cmplp  cpx find_len
-        beq ?hit
-        lda (zp_scr_ptr),y
-        and #$7F                    ; ignore inverse video bit
-        ora #$20                    ; case-fold
-        sta ?tmp
-        lda find_buf,x
-        ora #$20
-        cmp ?tmp
+        ldy #0                 ; Y = char-byte offset within row (0,2,4,...)
+col_loop
+?collp  sty zp_tmp1            ; start offset
+        ldx #0                 ; index into find_fold
+cmp_loop
+?cmplp  lda (zp_scr_ptr),y
+        and #$7F               ; ignore inverse video bit
+        ora #$20               ; case-fold
+        cmp find_fold,x
         bne ?miss
         iny
         iny
         inx
-        jmp ?cmplp
+        cpx find_len
+        bne ?cmplp
+cmp_end
+        ert >?cmplp <> >*         ; hot loop: keep it in one page
 
-?hit    ldx find_count
-        lda ?row
+        ldx find_count         ; hit
+        lda zp_tmp2
         sta find_match_row,x
-        lda ?startY
+        lda zp_tmp1
         lsr
         sta find_match_col,x
         inx
         stx find_count
         cpx #FIND_MAX_MATCH
         beq ?done
-?miss   ldy ?startY
+?miss   ldy zp_tmp1
         iny
         iny
-        cpy #SCR_STRIDE
+?lim    cpy #0                 ; (operand patched)
         bcc ?collp
+col_end
+        ert >?collp <> >*      ; the column scan stays in one page
 
-?next_row
-        ldx ?row
+        ldx zp_tmp2
         inx
         cpx #CONTENT_BOT+1
         bcc ?rowlp
 
 ?done   memb_off
         rts
-
-?row    dta 0
-?startY dta 0
-?tmp    dta 0
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -159,99 +186,85 @@ find_saved       = $0700          ; 256 B in page 7
         memb_on 0
         lda #0
         sta ?sidx
-        lda #0
         sta ?mi
-?mlp    lda ?mi
-        cmp find_count
+?mlp    ldx ?mi
+        cpx find_count
         bcs ?done
-
-        ldx ?mi
-        lda find_match_row,x
-        tax
-        lda row_addr_lo,x
+        ldy find_match_row,x
+        lda row_addr_lo,y
         sta zp_scr_ptr
-        lda row_addr_hi,x
+        lda row_addr_hi,y
         sta zp_scr_ptr+1
-
-        ldx ?mi
         lda find_match_col,x
-        asl
+        sec
+        rol                    ; Y = col*2+1 = attr offset of the first char
         tay
-        iny                         ; Y = attr offset for first char
-
-        ldx #0                      ; char counter 0..find_len-1
-?clp    cpx find_len
-        bcs ?nm
-        lda (zp_scr_ptr),y          ; read original attr
-        stx ?cx
+        lda find_len
+        sta ?n
         ldx ?sidx
+?clp    lda (zp_scr_ptr),y     ; save the original attr
         sta find_saved,x
-        inc ?sidx
-        ldx ?cx
+        inx
         lda #FIND_HILITE
         sta (zp_scr_ptr),y
         iny
         iny
-        inx
-        jmp ?clp
-?nm     inc ?mi
-        jmp ?mlp
+        dec ?n
+        bne ?clp
+        stx ?sidx
+        inc ?mi
+        bne ?mlp               ; always
 ?done   memb_off
         rts
 
 ?mi     dta 0
 ?sidx   dta 0
-?cx     dta 0
+?n      dta 0
 .endp
 
 ; ----------------------------------------------------------------------------
 ; find_restore - Write saved attrs back (mirrors find_highlight layout)
 ; ----------------------------------------------------------------------------
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: the match loop in one page)
+        page_fit 0, find_restore.pend-find_restore
+ .endif
 .proc find_restore
         memb_on 0
         lda #0
         sta ?sidx
-        lda #0
         sta ?mi
-?mlp    lda ?mi
-        cmp find_count
+?mlp    ldx ?mi
+        cpx find_count
         bcs ?done
-
-        ldx ?mi
-        lda find_match_row,x
-        tax
-        lda row_addr_lo,x
+        ldy find_match_row,x
+        lda row_addr_lo,y
         sta zp_scr_ptr
-        lda row_addr_hi,x
+        lda row_addr_hi,y
         sta zp_scr_ptr+1
-
-        ldx ?mi
         lda find_match_col,x
-        asl
+        sec
+        rol                    ; Y = attr offset of the first char
         tay
-        iny
-
-        ldx #0
-?clp    cpx find_len
-        bcs ?nm
-        stx ?cx
+        lda find_len
+        sta ?n
         ldx ?sidx
-        lda find_saved,x
-        inc ?sidx
-        ldx ?cx
+?clp    lda find_saved,x
         sta (zp_scr_ptr),y
-        iny
-        iny
         inx
-        jmp ?clp
-?nm     inc ?mi
-        jmp ?mlp
+        iny
+        iny
+        dec ?n
+        bne ?clp
+        stx ?sidx
+        inc ?mi
+        bne ?mlp               ; always
 ?done   memb_off
         rts
+pend
 
 ?mi     dta 0
 ?sidx   dta 0
-?cx     dta 0
+?n      dta 0
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -263,17 +276,14 @@ find_saved       = $0700          ; 256 B in page 7
         bcc ?o
         sbc #10
         inx
-        jmp ?t
+        bne ?t                 ; always
 ?o      pha
-        cpx #0
-        beq ?no_t
         txa
-        clc
-        adc #'0'
+        beq ?no_t
+        ora #'0'
         jsr vbxe_putchar
 ?no_t   pla
-        clc
-        adc #'0'
+        ora #'0'
         jmp vbxe_putchar
 .endp
 
@@ -282,6 +292,10 @@ find_saved       = $0700          ; 256 B in page 7
 ; while skipping content inside HTML tags (<...>). Case-insensitive (ASCII).
 ; Saves and restores the parser's read pointer so rendering can resume.
 ; ----------------------------------------------------------------------------
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: the whole byte loop with its
+                                ; ?lt/?gt/?reset_m arms in one page)
+        page_fit find_scan_full.slp_s-find_scan_full, find_scan_full.slp_e-find_scan_full.slp_s
+ .endif
 .proc find_scan_full
         ; Save parser read state
         lda pb_rd_bank
@@ -304,31 +318,30 @@ find_saved       = $0700          ; 256 B in page 7
 
         lda #0
         sta find_total
+        sta zp_tmp3            ; inside-tag flag in bit 7 during the scan
         sta find_mpos
-        sta find_intag
 
-?cloop  ; Compute remaining = pb_total - pb_read (24-bit)
+?cloop  ; remaining = pb_total - pb_read (24-bit), chunk = min(255, remaining)
         lda pb_total
         sec
         sbc pb_read
-        sta ?rem_lo
+        tay
         lda pb_total+1
         sbc pb_read+1
-        sta ?rem_hi
+        tax
         lda pb_total+2
         sbc pb_read+2
-        bne ?has_upper              ; hi byte nonzero → remaining >= 65536
-        lda ?rem_hi
-        bne ?has_upper              ; mid byte nonzero → remaining >= 256
-        lda ?rem_lo
-        beq ?done                   ; remaining = 0
-        jmp ?do_read
+        bne ?has_upper         ; remaining >= 65536
+        txa
+        bne ?has_upper         ; remaining >= 256
+        tya
+        beq ?done              ; remaining = 0
+        bne ?do_read           ; always
 ?has_upper
         lda #255
 ?do_read
-        jsr vbxe_pb_read_chunk      ; reads A bytes, zp_rx_len = A
-        ; Advance pb_read by zp_rx_len (caller's responsibility)
-        clc
+        jsr vbxe_pb_read_chunk ; reads A bytes, zp_rx_len = A
+        clc                    ; pb_read += zp_rx_len
         lda pb_read
         adc zp_rx_len
         sta pb_read
@@ -337,52 +350,59 @@ find_saved       = $0700          ; 256 B in page 7
         bne ?npr
         inc pb_read+2
 ?npr
+        ldx find_mpos          ; X = partial match position
         ldy #0
+slp_s
 ?slp    cpy zp_rx_len
-        bcs ?cloop
-
+        bcs ?chunk_end
         lda rx_buffer,y
+        iny
         cmp #'<'
-        bne ?no_lt
-        lda #1
-        sta find_intag
-        lda #0
-        sta find_mpos
-        jmp ?adv
-?no_lt  cmp #'>'
-        bne ?no_gt
-        lda #0
-        sta find_intag
-        jmp ?adv
-?no_gt  lda find_intag
-        bne ?adv                    ; inside tag, skip
-
-        ; Try to match against find_buf[find_mpos]
-        lda rx_buffer,y
+        beq ?lt
+        cmp #'>'
+        beq ?gt
+        bit zp_tmp3            ; inside a tag: skip (N = bit 7 of the flag)
+        bmi ?slp
+        ert >?slp <> >*         ; hot loop: keep it in one page
         and #$7F
         ora #$20
-        sta ?tmp
-        ldx find_mpos
-        lda find_buf,x
-        ora #$20
-        cmp ?tmp
+        cmp find_fold,x
         bne ?reset_m
-        inc find_mpos
-        lda find_mpos
-        cmp find_len
-        bne ?adv
-        ; Complete match
-        inc find_total
-        lda #0
-        sta find_mpos
-        jmp ?adv
+        inx
+        cpx find_len
+        bne ?slp
+        inc find_total         ; complete match
 ?reset_m
-        lda #0
-        sta find_mpos
-?adv    iny
-        jmp ?slp
+        ldx #0
+        beq ?slp               ; always
+?lt     lda #$80
+        sta zp_tmp3
+        ldx #0
+        beq ?slp               ; always
+?gt     lda #0
+        sta zp_tmp3
+        beq ?slp               ; always
+slp_e
+?chunk_end
+        stx find_mpos
+        jmp ?cloop
 
-?done   ; Restore parser state
+?done   lda zp_tmp3            ; find_intag = 0/1 as before
+        asl
+        lda #0
+        rol
+        sta find_intag
+        ; The scan reused rx_buffer: reload the chunk the parser is on (find
+        ; can run from --More-- in the middle of a page), then its state
+        lda http_render.pb_rd_save_bank
+        sta pb_rd_bank
+        lda http_render.pb_rd_save_lo
+        sta zp_pb_rd_ptr
+        lda http_render.pb_rd_save_hi
+        sta zp_pb_rd_ptr+1
+        lda http_render.pb_chunk_size
+        jsr vbxe_pb_read_chunk
+        ; Restore parser state
         lda ?sv_bank
         sta pb_rd_bank
         lda ?sv_lo
@@ -397,7 +417,7 @@ find_saved       = $0700          ; 256 B in page 7
         sta pb_read+2
         lda ?sv_rxlen
         sta zp_rx_len
-        rts
+        jmp parse_sentinel
 
 ?sv_bank  dta 0
 ?sv_lo    dta 0
@@ -406,13 +426,16 @@ find_saved       = $0700          ; 256 B in page 7
 ?sv_rd1   dta 0
 ?sv_rd2   dta 0
 ?sv_rxlen dta 0
-?tmp      dta 0
-?rem_lo   dta 0
-?rem_hi   dta 0
 .endp
 
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_prompt  dta c' Find: ',1,c'Return  Search   Esc  Cancel',0
+m_nomatch dta c' No matches',1,c'any key',0
+m_found   dta c' Matches: ',1,c'any key',0
+ .else
 m_prompt  dta c'Find: ',0
 m_nomatch dta c' No matches (press a key)',0
 m_found   dta c' Matches: ',0
+ .endif
 m_visible dta c' visible, ',0
 m_total   dta c' total',0

@@ -3,6 +3,42 @@
 ; ============================================================================
 
 .proc vbxe_init
+ .if 1                          ; 2026-09-23 (vbxe-blitter: no fill pattern any more, the gradient
+                                ; BCB is set up once here)
+        memb_on 0
+
+        jsr copy_font
+        jsr copy_font_inv
+        jsr setup_xdl
+        jsr setup_bcb
+        jsr setup_grad_bcb
+
+        memb_off
+
+        jsr setup_palette
+
+        ; Set XDL address (VRAM_XDL low byte is 0)
+        ldy #VBXE_XDL_ADR0
+        lda #<VRAM_XDL
+        sta (zp_vbxe_base),y
+        iny
+        lda #>VRAM_XDL
+        sta (zp_vbxe_base),y
+        iny
+        lda #0
+        sta (zp_vbxe_base),y
+
+        ; Enable VBXE: XDL + XCOLOR (index 0 = transparent ??? shows ANTIC COLBK)
+        ldy #VBXE_VCTL
+        lda #VC_XDL_ENABLED | VC_XCOLOR
+        sta (zp_vbxe_base),y
+
+        ; Disable ANTIC DMA
+        lda #0
+        sta SDMCTL
+
+        rts
+ .else
         memb_on 0
 
         jsr copy_font
@@ -31,7 +67,7 @@
         lda #0
         sta (zp_vbxe_base),y
 
-        ; Enable VBXE: XDL + XCOLOR (index 0 = transparent → shows ANTIC COLBK)
+        ; Enable VBXE: XDL + XCOLOR (index 0 = transparent ??? shows ANTIC COLBK)
         ldy #VBXE_VCTL
         lda #VC_XDL_ENABLED | VC_XCOLOR
         sta (zp_vbxe_base),y
@@ -41,6 +77,7 @@
         sta SDMCTL
 
         rts
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -48,6 +85,28 @@
 ; Remaps internal->ASCII page order
 ; ----------------------------------------------------------------------------
 .proc copy_font
+ .if 1                          ; 2026-09-23 (6502-loops-tables-smc: absolute SMC source/dest pages,
+                                ; 14 cycles a byte instead of 16; count down)
+        ldx #3
+?pglp   lda CHBAS              ; source page = CHBAS + int2asc[X]
+        clc
+        adc int2asc,x
+        sta ?src+2
+        txa                    ; dest page = MEMB_FONT page + X (C = 0)
+        adc #>MEMB_FONT
+        sta ?dst+2
+        ldy #0
+?src    lda $FF00,y            ; (pages patched)
+?dst    sta $FF00,y
+        iny
+        bne ?src
+        dex
+        bpl ?pglp
+        rts
+
+; Data AFTER code so it's not executed
+int2asc dta 2, 0, 1, 3
+ .else
         lda CHBAS
         sta zp_tmp1
 
@@ -79,12 +138,31 @@
 
 ; Data AFTER code so it's not executed
 int2asc dta 2, 0, 1, 3
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
 ; copy_font_inv - Create inverse font (XOR $FF)
 ; ----------------------------------------------------------------------------
 .proc copy_font_inv
+ .if 1                          ; 2026-09-23 (6502-loops-tables-smc: absolute SMC pages; count down)
+        ldx #3
+?pglp   txa
+        clc
+        adc #>MEMB_FONT
+        sta ?src+2
+        adc #4                 ; C = 0: +$400
+        sta ?dst+2
+        ldy #0
+?src    lda $FF00,y            ; (pages patched)
+        eor #$FF
+?dst    sta $FF00,y
+        iny
+        bne ?src
+        dex
+        bpl ?pglp
+        rts
+ .else
         lda #<MEMB_FONT
         sta zp_tmp_ptr
         lda #>MEMB_FONT
@@ -107,12 +185,21 @@ int2asc dta 2, 0, 1, 3
         dex
         bne ?pglp
         rts
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
 ; setup_xdl - Write XDL to VRAM (MEMAC B must be on)
 ; ----------------------------------------------------------------------------
 .proc setup_xdl
+ .if 1                          ; 2026-09-23 (6502-idioms: count down, no cpx)
+        ldx #XDL_LEN-1
+?lp     lda xdl_data,x
+        sta MEMB_XDL,x
+        dex
+        bpl ?lp
+        rts
+ .else
         ldx #0
 ?lp     lda xdl_data,x
         sta MEMB_XDL,x
@@ -120,6 +207,7 @@ int2asc dta 2, 0, 1, 3
         cpx #XDL_LEN
         bne ?lp
         rts
+ .endif
 
 xdl_data
         ; Entry 1: top border (8 scanlines for CRT overscan)
@@ -146,6 +234,14 @@ XDL_LEN = * - xdl_data
 ; setup_bcb - Write blitter command blocks to VRAM
 ; ----------------------------------------------------------------------------
 .proc setup_bcb
+ .if 1                          ; 2026-09-23 (6502-idioms: count down, no cpx)
+        ldx #BCB_DATA_LEN      ; <= 256 bytes
+?lp     lda bcb_data-1,x
+        sta MEMB_BCB-1,x
+        dex
+        bne ?lp
+        rts
+ .else
         ldx #0
 ?lp     lda bcb_data,x
         sta MEMB_BCB,x
@@ -153,7 +249,101 @@ XDL_LEN = * - xdl_data
         cpx #BCB_DATA_LEN
         bne ?lp
         rts
+ .endif
 
+ .if 1                          ; 2026-09-23 (vbxe-blitter: every fill a constant fill, AND 0 / XOR
+                                ; value, 1 cycle a byte: cls, scroll row, row fill, content clear).
+                                ; Pairs with vbxe_cls/fill_row/ui_clear_content: flip together
+bcb_data
+
+; BCB 0: clear screen, characters (offset 0)
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN), >(VRAM_SCREEN), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta SCR_ROWS - 1                 ; height - 1
+        dta $00, CH_SPACE, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $08
+; BCB 1: clear screen, attributes
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN+1), >(VRAM_SCREEN+1), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta SCR_ROWS - 1                 ; height - 1
+        dta $00, COL_BLACK, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $00
+; BCB 2: Scroll up (offset 42): rows 1..28 -> 0..27
+        dta <(VRAM_SCREEN + SCR_STRIDE), >(VRAM_SCREEN + SCR_STRIDE), 0
+        dta a(SCR_STRIDE)
+        dta 1
+        dta <VRAM_SCREEN, >VRAM_SCREEN, 0
+        dta a(SCR_STRIDE)
+        dta 1
+        dta a(SCR_STRIDE - 1)
+        dta SCR_ROWS - 2
+        dta $FF, $00, $00, 0, $00
+        dta $08                        ; chain: clear the last row
+; BCB 3: last row, characters
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN + (SCR_ROWS-1) * SCR_STRIDE), >(VRAM_SCREEN + (SCR_ROWS-1) * SCR_STRIDE), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta 1 - 1                 ; height - 1
+        dta $00, CH_SPACE, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $08
+; BCB 4: last row, attributes
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN + (SCR_ROWS-1) * SCR_STRIDE + 1), >(VRAM_SCREEN + (SCR_ROWS-1) * SCR_STRIDE + 1), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta 1 - 1                 ; height - 1
+        dta $00, COL_BLACK, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $00
+; BCB 5: fill one row, characters (offset 105; dest set per fill)
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN), >(VRAM_SCREEN), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta 1 - 1                 ; height - 1
+        dta $00, CH_SPACE, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $08
+; BCB 6: fill one row, attributes (dest + XOR colour set per fill)
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN+1), >(VRAM_SCREEN+1), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta 1 - 1                 ; height - 1
+        dta $00, COL_BLACK, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $00
+; BCB 7: clear content rows, characters (offset 147)
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN + CONTENT_TOP * SCR_STRIDE), >(VRAM_SCREEN + CONTENT_TOP * SCR_STRIDE), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta CONTENT_BOT - CONTENT_TOP + 1 - 1                 ; height - 1
+        dta $00, CH_SPACE, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $08
+; BCB 8: clear content rows, attributes
+        dta 0, 0, 0, a(0), 0           ; source unused (AND = 0)
+        dta <(VRAM_SCREEN + CONTENT_TOP * SCR_STRIDE + 1), >(VRAM_SCREEN + CONTENT_TOP * SCR_STRIDE + 1), 0
+        dta a(SCR_STRIDE)              ; dest step Y
+        dta 2                          ; dest step X: every other byte
+        dta a(SCR_COLS - 1)            ; width - 1
+        dta CONTENT_BOT - CONTENT_TOP + 1 - 1                 ; height - 1
+        dta $00, COL_BLACK, $00, 0, $00    ; AND 0, XOR = value: constant fill
+        dta $00
+
+BCB_DATA_LEN = * - bcb_data
+        ert VRAM_BCB+BCB_DATA_LEN > VRAM_GRAD
+        ert BCB_DATA_LEN > 256
+ .else
 bcb_data
 
 ; BCB 0: Clear screen (21 bytes, offset 0)
@@ -213,166 +403,105 @@ bcb_data
         dta $00                        ; Control: normal
 
 BCB_DATA_LEN = * - bcb_data
+ .endif
 .endp
 
+ .if 1                          ; 2026-09-23 (vbxe-blitter: offsets of the table above)
+BCB_CLS_OFS     = 0
+BCB_SCROLL_OFS  = 42
+BCB_ROW_OFS     = 105
+BCB_CONTENT_OFS = 147
+ .else
 BCB_CLS_OFS    = 0
 BCB_SCROLL_OFS = 21
+ .endif
+
+ .if 1                          ; 2026-09-23 (vbxe-blitter: constant fills, see setup_grad_bcb)
+BCB_GRAD_OFS    = VRAM_GRAD_BCB-VRAM_BCB
+ .else
+BCB_GRAD_OFS    = VRAM_GRAD+4-VRAM_BCB   ; after the 4 colour bytes
+ .endif
 
 ; ----------------------------------------------------------------------------
-; setup_palette - Init VBXE overlay palette 1 (8 colors)
+; setup_grad_bcb - Title gradient colours + BCB at VRAM_GRAD (after the text
+; BCBs). One blit fills the 4 bands: the source steps one colour byte per
+; row (step Y 1) and repeats it along the row (step X 0).
 ; ----------------------------------------------------------------------------
-.proc setup_palette
-        ldy #VBXE_PSEL
-        lda #1
-        sta (zp_vbxe_base),y
-
-        ldy #VBXE_CSEL
-        lda #0
-        sta (zp_vbxe_base),y
-
-        ldx #0
-?lp     ldy #VBXE_CR
-        lda pal_r,x
-        sta (zp_vbxe_base),y
-        iny
-        lda pal_g,x
-        sta (zp_vbxe_base),y
-        iny
-        lda pal_b,x
-        sta (zp_vbxe_base),y
-
-        ; Increment CSEL manually
-        ldy #VBXE_CSEL
-        txa
-        clc
-        adc #1
-        sta (zp_vbxe_base),y
-
-        inx
-        cpx #8
-        bne ?lp
-
-        ; --- Gradient palette (indices 8-11) for title banner ---
-        ; CSEL=8 here (from main loop above)
-        ldx #0
-?grad   ldy #VBXE_CR
-        lda grad_pal_r,x
-        sta (zp_vbxe_base),y
-        iny
-        lda grad_pal_g,x
-        sta (zp_vbxe_base),y
-        iny
-        lda grad_pal_b,x
-        sta (zp_vbxe_base),y
-
-        ldy #VBXE_CSEL
-        txa
-        clc
-        adc #9
-        sta (zp_vbxe_base),y
-
-        inx
-        cpx #4
-        bne ?grad
-
-        ; --- Extra text colors (indices 12-15) ---
-        ; CSEL=12 here (from gradient loop: 3+9=12)
-        ldx #0
-?ext    ldy #VBXE_CR
-        lda ext_pal_r,x
-        sta (zp_vbxe_base),y
-        iny
-        lda ext_pal_g,x
-        sta (zp_vbxe_base),y
-        iny
-        lda ext_pal_b,x
-        sta (zp_vbxe_base),y
-
-        ldy #VBXE_CSEL
-        txa
-        clc
-        adc #13
-        sta (zp_vbxe_base),y
-
-        inx
-        cpx #4
-        bne ?ext
-
-        ; --- ANSI color palette (indices $10-$1F, 16 colors) ---
-        ldy #VBXE_CSEL
-        lda #ATTR_ANSI_BASE
-        sta (zp_vbxe_base),y
-
-        ldx #0
-?ansi   ldy #VBXE_CR
-        lda ansi_pal_r,x
-        sta (zp_vbxe_base),y
-        iny
-        lda ansi_pal_g,x
-        sta (zp_vbxe_base),y
-        iny
-        lda ansi_pal_b,x
-        sta (zp_vbxe_base),y
-
-        ldy #VBXE_CSEL
-        txa
-        clc
-        adc #ATTR_ANSI_BASE+1
-        sta (zp_vbxe_base),y
-
-        inx
-        cpx #16
-        bne ?ansi
-
-        ; Set palette entries $20-$3F to blue (link colors with embedded link#)
-        ldy #VBXE_CSEL
-        lda #ATTR_LINK_BASE
-        sta (zp_vbxe_base),y
-
-        ldx #0
-?lnk    ldy #VBXE_CR
-        lda #$00               ; R = same as COL_BLUE
-        sta (zp_vbxe_base),y
-        iny
-        lda #$AA               ; G
-        sta (zp_vbxe_base),y
-        iny
-        lda #$FF               ; B
-        sta (zp_vbxe_base),y
-
-        ; Set CSEL to next entry
-        ldy #VBXE_CSEL
-        txa
-        clc
-        adc #ATTR_LINK_BASE+1
-        sta (zp_vbxe_base),y
-
-        inx
-        cpx #64
-        bne ?lnk
+.proc setup_grad_bcb
+ .if 1                          ; 2026-09-23 (vbxe-blitter: a constant fill is AND 0 / XOR colour,
+                                ; 1 cycle a byte: 4 x (320+22) = 1368 blitter cycles against
+                                ; 4 x (320+320) + 21 = 2581 for the copy from a colour column)
+        ldx #GRAD_DATA_LEN-1
+?lp     lda grad_data,x
+        sta MEMB_BASE+VRAM_GRAD_BCB,x
+        dex
+        bpl ?lp
         rts
 
-;            blk  wht  blue org  grn  red  gray yel
-pal_r dta   $00, $FF, $00, $FF, $00, $FF, $88, $FF
-pal_g dta   $00, $FF, $AA, $AA, $FF, $44, $88, $FF
-pal_b dta   $00, $FF, $FF, $00, $00, $44, $88, $00
+grad_data                       ; top (dark) to bottom, palette indices 8-11
+        dta 0, 0, 0, a(0), 0           ; band 0: source unused (AND = 0)
+        dta <(VRAM_GRADIENT+GRAD_BAND_W*0), >(VRAM_GRADIENT+GRAD_BAND_W*0), 0
+        dta a(GRAD_BAND_W), 1
+        dta a(GRAD_BAND_W - 1), 0      ; width - 1 (9 bits), one row
+        dta $00, 8, $00, 0, $00        ; AND 0, XOR = palette index
+        dta $08
+        dta 0, 0, 0, a(0), 0           ; band 1: source unused (AND = 0)
+        dta <(VRAM_GRADIENT+GRAD_BAND_W*1), >(VRAM_GRADIENT+GRAD_BAND_W*1), 0
+        dta a(GRAD_BAND_W), 1
+        dta a(GRAD_BAND_W - 1), 0      ; width - 1 (9 bits), one row
+        dta $00, 9, $00, 0, $00        ; AND 0, XOR = palette index
+        dta $08
+        dta 0, 0, 0, a(0), 0           ; band 2: source unused (AND = 0)
+        dta <(VRAM_GRADIENT+GRAD_BAND_W*2), >(VRAM_GRADIENT+GRAD_BAND_W*2), 0
+        dta a(GRAD_BAND_W), 1
+        dta a(GRAD_BAND_W - 1), 0      ; width - 1 (9 bits), one row
+        dta $00, 10, $00, 0, $00        ; AND 0, XOR = palette index
+        dta $08
+        dta 0, 0, 0, a(0), 0           ; band 3: source unused (AND = 0)
+        dta <(VRAM_GRADIENT+GRAD_BAND_W*3), >(VRAM_GRADIENT+GRAD_BAND_W*3), 0
+        dta a(GRAD_BAND_W), 1
+        dta a(GRAD_BAND_W - 1), 0      ; width - 1 (9 bits), one row
+        dta $00, 11, $00, 0, $00        ; AND 0, XOR = palette index
+        dta $00
+hline_bcb                       ; vbxe_hline: chars, then attributes; dest,
+        dta 0, 0, 0, a(0), 0           ; width and XOR written per line
+        dta 0, 0, 0
+        dta a(SCR_STRIDE), 2
+        dta a(0), 0                    ; width - 1, one row
+        dta $00, $00, $00, 0, $00      ; AND 0, XOR = char: constant fill
+        dta $08
+        dta 0, 0, 0, a(0), 0
+        dta 0, 0, 0
+        dta a(SCR_STRIDE), 2
+        dta a(0), 0
+        dta $00, $00, $00, 0, $00      ; XOR = attribute
+        dta $00
+GRAD_DATA_LEN = * - grad_data
+        ert GRAD_DATA_LEN > 128
+        ert VRAM_GRAD_BCB+GRAD_DATA_LEN > VRAM_FONT
+        ert VRAM_GRAD_BCB + hline_bcb - grad_data <> VRAM_HLINE_BCB
+ .else
+        ldx #GRAD_DATA_LEN-1
+?lp     lda grad_data,x
+        sta MEMB_BASE+VRAM_GRAD,x
+        dex
+        bpl ?lp
+        rts
 
-;            cyan  pink  ltgray lime
-ext_pal_r dta $00,  $FF,  $BB,  $88
-ext_pal_g dta $DD,  $88,  $BB,  $FF
-ext_pal_b dta $FF,  $CC,  $BB,  $44
-
-; Gradient: dark blue (top) -> medium blue (bottom)
-grad_pal_r dta $10, $20, $30, $50
-grad_pal_g dta $10, $30, $60, $90
-grad_pal_b dta $40, $80, $C0, $FF
-
-; ANSI CGA colors at palette indices $10-$1F
-; Standard 8 colors ($10-$17): black, red, green, yellow, blue, magenta, cyan, white
-; Bright 8 colors ($18-$1F): same order, higher intensity (used with ESC[1m bold)
-; Values match IBM CGA/EGA palette for correct ANSI art rendering
-;              blk  red  grn  yel  blu  mag  cyn  wht  Bblk Bred Bgrn Byel Bblu Bmag Bcyn Bwht
-ansi_pal_r dta $00, $AA, $00, $AA, $00, $AA, $00, $AA, $55, $FF, $55, $FF, $55, $FF, $55, $FF
-ansi_pal_g dta $00, $00, $AA, $55, $00, $00, $AA, $AA, $55, $55, $FF, $FF, $55, $55, $FF, $FF
-ansi_pal_b dta $00, $00, $00, $00, $AA, $AA, $AA, $AA, $55, $55, $55, $55, $FF, $FF, $FF, $FF
+grad_data
+        dta 8, 9, 10, 11               ; palette indices, top (dark) to bottom
+        dta <VRAM_GRAD, >VRAM_GRAD, 0
+        dta a(1)                       ; source step Y: next colour per row
+        dta 0                          ; source step X: repeat it
+        dta <VRAM_GRADIENT, >VRAM_GRADIENT, 0
+        dta a(GRAD_BAND_W)             ; dest step Y
+        dta 1
+        dta a(GRAD_BAND_W - 1)         ; width - 1 (9 bits)
+        dta GRAD_BANDS - 1
+        dta $FF, $00, $00, 0, $00, $00
+GRAD_DATA_LEN = * - grad_data
+        ert VRAM_GRAD+GRAD_DATA_LEN > VRAM_XDL
+ .endif
 .endp
+
+; setup_palette moved to vbxe_pal.asm (register I/O only, no MEMAC B needed)

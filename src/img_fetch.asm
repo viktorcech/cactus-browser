@@ -38,14 +38,12 @@ IMG_MAX_RETRIES = 40
 ; ----------------------------------------------------------------------------
 .proc img_check_abort
         lda CH
-        cmp #KEY_NONE
-        beq ?no
-        lda #KEY_NONE
+        eor #KEY_NONE          ; 0 = no key
+        cmp #1                 ; C = 1: a key was pressed
+        bcc ?no
+        lda #KEY_NONE          ; consume it (C stays 1)
         sta CH
-        sec
-        rts
-?no     clc
-        rts
+?no     rts
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -66,12 +64,10 @@ IMG_MAX_RETRIES = 40
         jsr fn_status
         bcs ?e_sio
         lda zp_fn_error
-        bmi ?chk_fatal
-        jmp ?no_err
-?chk_fatal
+        bpl ?no_err
         cmp #136
         beq ?e_eof
-        jmp ?e_fatal
+        bne ?e_fatal           ; always
 ?no_err
         lda zp_fn_bytes_hi
         bne ?read
@@ -83,7 +79,7 @@ IMG_MAX_RETRIES = 40
         dec img_timeout
         beq ?e_tout
         wait_frames 6
-        jmp ?wt
+        beq ?wt                ; always (wait_frames returns Z = 1)
 
 ?read   lda #3
         sta zp_fn_bytes_lo
@@ -102,12 +98,12 @@ IMG_MAX_RETRIES = 40
         lda img_hdr_w+1
         cmp #2
         bcs ?e_san
-        cmp #1
-        bne ?chk_lo
+        lsr                    ; hi = 1?
+        bcc ?chk_lo
         lda img_hdr_w
         cmp #$41
         bcs ?e_san
-        jmp ?chk_h
+        bcc ?chk_h             ; always
 ?chk_lo lda img_hdr_w
         cmp #8
         bcc ?e_san
@@ -116,23 +112,22 @@ IMG_MAX_RETRIES = 40
         bcc ?e_san
         cmp #209
         bcs ?e_san
-        clc
-        rts
-?e_abort lda #1
-        jmp ?fail
-?e_sio  lda #2
-        jmp ?fail
-?e_eof  lda #3
-        jmp ?fail
+        rts                    ; C = 0
 ?e_fatal sta img_fn_err
         lda #4
-        jmp ?fail
+        .byte $2C              ; bit abs: skips the next lda # (RAM read only)
+?e_abort lda #1
+        .byte $2C
+?e_sio  lda #2
+        .byte $2C
+?e_eof  lda #3
+        .byte $2C
 ?e_disc lda #5
-        jmp ?fail
+        .byte $2C
 ?e_tout lda #6
-        jmp ?fail
+        .byte $2C
 ?e_sio2 lda #7
-        jmp ?fail
+        .byte $2C
 ?e_san  lda #8
 ?fail   sta img_err_code
         sec
@@ -165,10 +160,7 @@ img_fn_err   dta b(0)
         jsr fn_status
         bcs ?err
         lda zp_fn_error
-        cmp #136
-        beq ?err
-        cmp #128
-        bcs ?err
+        bmi ?err               ; >= 128: EOF (136) or fatal
         lda zp_fn_bytes_lo
         ora zp_fn_bytes_hi
         beq ?wait
@@ -181,44 +173,54 @@ img_fn_err   dta b(0)
         lda #IMG_MAX_RETRIES
         sta img_timeout
 
-        ldy #0
-?cp     cpy zp_rx_len
-        beq ?chk
-        lda rx_buffer,y
-        sty zp_tmp3
-        ldy #0
+        ; n = min(chunk, 768 - count): copy it as one block
+        lda #<768
+        sec
+        sbc img_pal_cnt
+        tax
+        lda #>768
+        sbc img_pal_cnt+1
+        bne ?all               ; >= 256 left: the whole chunk
+        cpx zp_rx_len
+        bcs ?all
+        stx ?n                 ; the palette ends inside this chunk
+        bcc ?go                ; always
+?all    lda zp_rx_len
+        sta ?n
+?go     ldy #0
+?cp     lda rx_buffer,y
         sta (zp_tmp_ptr),y
-        ldy zp_tmp3
-
-        inc zp_tmp_ptr
-        bne ?nc1
+        iny
+        cpy ?n
+        bne ?cp
+        tya                    ; ptr += n, count += n
+        clc
+        adc zp_tmp_ptr
+        sta zp_tmp_ptr
+        bcc ?nc1
         inc zp_tmp_ptr+1
-?nc1    inc img_pal_cnt
-        bne ?nc2
+?nc1    tya
+        clc
+        adc img_pal_cnt
+        sta img_pal_cnt
+        bcc ?nc2
         inc img_pal_cnt+1
 ?nc2    lda img_pal_cnt+1
         cmp #3
-        bcs ?done
-        iny
-        jmp ?cp
-
-?chk    lda img_pal_cnt+1
-        cmp #3
-        bcs ?done
-        jmp ?lp
+        bcs ?done_y            ; 768 reached: Y = first leftover byte
+        jcc ?lp                ; always
 
 ?wait   dec img_timeout
         beq ?err
         wait_frames 6
-        jmp ?lp
+        jeq ?lp                ; always (wait_frames returns Z = 1)
 
 ?err    lda #0
         sta img_pal_leftover   ; no leftover on error
         sec
         rts
 
-?done   ; Palette complete — save any leftover pixel bytes in rx_buffer
-        iny                    ; Y was on last palette byte, advance past it
+?done_y ; Palette complete -- save any leftover pixel bytes in rx_buffer
         cpy zp_rx_len
         bcs ?no_left           ; no leftover pixels in this chunk
         ; Shift rx_buffer[Y..rx_len-1] to rx_buffer[0..]
@@ -237,6 +239,7 @@ img_fn_err   dta b(0)
         sta img_pal_leftover   ; no leftover pixels
         clc
         rts
+?n      dta 0
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -246,62 +249,97 @@ img_fn_err   dta b(0)
 ; Output: C=0 ok (image complete or partial), C=1 error
 ; ----------------------------------------------------------------------------
 .proc img_read_pixels
+        ; left = width * height - bytes already written (palette leftover)
+        lda #0
+        sta img_left
+        sta img_left+1
+        sta img_left+2
+        ldx img_hdr_h
+?mul    lda img_left
+        clc
+        adc img_hdr_w
+        sta img_left
+        lda img_left+1
+        adc img_hdr_w+1
+        sta img_left+1
+        bcc ?m1
+        inc img_left+2
+?m1     dex
+        bne ?mul
+        lda img_left
+        sec
+        sbc img_pal_leftover
+        sta img_left
+        bcs ?m2
+        lda img_left+1
+        bne ?m3
+        dec img_left+2
+?m3     dec img_left+1
+?m2
         lda #IMG_MAX_RETRIES
         sta img_timeout
 
-?lp     jsr img_check_abort
+?lp     lda img_left           ; whole image received: done
+        ora img_left+1
+        ora img_left+2
+        beq ?done
+        jsr img_check_abort
         bcs ?err
 
         jsr fn_status
         bcs ?err
-        lda zp_fn_error
-        bmi ?chk_fatal
-        jmp ?no_err
-?chk_fatal
-        cmp #136
-        beq ?done
-        jmp ?err
-?no_err
-        ; Check connected FIRST for images (unlike http_get which
-        ; reads buffered data after disconnect, here TLS errors
-        ; mean the buffer is unreadable → skip to avoid SIO errors)
-        lda zp_fn_connected
-        beq ?done
-
+        ; Read whatever is waiting FIRST: the server closes the connection as
+        ; soon as it has sent the image, while the tail still sits in the
+        ; FujiNet buffer (stopping on "disconnected" cut the bottom off)
         lda zp_fn_bytes_lo
         ora zp_fn_bytes_hi
         beq ?no_data
 
-        ; Read up to 2KB per SIO call (vs 255B in standard fn_read)
-        ; fn_read_img → img_big_buf, vbxe_img_write_big → VRAM
         jsr fn_read_img
-        bcs ?done              ; read error → show partial image
+        bcs ?done              ; read error -> show partial image
         lda img_chunk_lo
         ora img_chunk_hi
         beq ?lp                ; zero bytes read, retry
 
         lda #IMG_MAX_RETRIES
         sta img_timeout
-
-        ; Copy chunk from img_big_buf to VBXE VRAM
-        jsr vbxe_img_write_big
+        lda img_left           ; left -= chunk
+        sec
+        sbc img_chunk_lo
+        sta img_left
+        lda img_left+1
+        sbc img_chunk_hi
+        sta img_left+1
+        bcs ?w
+        dec img_left+2
+        bpl ?w
+        lda #0                 ; more than announced: stop after this chunk
+        sta img_left
+        sta img_left+1
+        sta img_left+2
+?w      jsr vbxe_img_write_big
         jmp ?lp
 
-?no_data
-        lda zp_fn_connected
+?no_data                       ; nothing waiting: end, error or wait
+        lda zp_fn_error
+        bpl ?live
+        cmp #136               ; EOF: the stream is complete
         beq ?done
-
+        bne ?err               ; fatal
+?live   lda zp_fn_connected
+        beq ?done              ; closed and drained
         dec img_timeout
         beq ?done
-
         wait_frames 6
-        jmp ?lp
+        jeq ?lp                ; always (wait_frames returns Z = 1)
 
 ?done   clc
         rts
 ?err    sec
         rts
 .endp
+
+img_left dta 0, 0, 0           ; pixel bytes still expected (24-bit)
 
 ; ----------------------------------------------------------------------------
 ; img_resolve_and_build_url - Resolve relative image URL and build converter URL
@@ -393,37 +431,31 @@ img_fn_err   dta b(0)
 
         ; Open N1: with image converter URL
         jsr fn_open
-        bcc ?open_ok
-        jmp ?e_open
-?open_ok
+        jcs ?e_open
 
         status_msg COL_YELLOW, m_step3
 
         ; Read header
         jsr img_read_header
-        bcc ?hdr_ok
-        jmp ?e_hdr
-?hdr_ok
+        jcs ?e_hdr
         ; Allocate VRAM
         lda img_hdr_h
         ldx img_hdr_w
         ldy img_hdr_w+1
         jsr vbxe_img_alloc
-        bcc ?alloc_ok
-        jmp ?e_alloc
-?alloc_ok
+        jcs ?e_alloc
 
         status_msg COL_YELLOW, m_step5
 
         ; Read palette
         jsr img_read_palette
-        bcc ?pal_ok
-        jmp ?e_pal
-?pal_ok
+        jcs ?e_pal
 
         status_msg COL_YELLOW, m_step6
 
-        ; Init write pointer
+        ; Init write pointer (a compact image streams to the end of the
+        ; image area, img_center moves it into place afterwards)
+        jsr img_stage
         jsr vbxe_img_begin_write
 
         ; Write any leftover pixel bytes from palette read
@@ -436,6 +468,7 @@ img_fn_err   dta b(0)
         jsr img_read_pixels
 
         jsr fn_close           ; close N1: image connection
+        jsr img_center         ; compact image -> centred 320-wide rows
 
         ; Set VBXE palette AFTER pixels (keeps text colors during download)
         lda #<img_pal_buf
@@ -445,7 +478,11 @@ img_fn_err   dta b(0)
         jsr vbxe_img_setpal
 
         ; Write status text
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+        status_msg COL_BLUE, m_imgview
+ .else
         status_msg COL_YELLOW, m_imgview
+ .endif
 
         ; Show image fullscreen
         jsr vbxe_img_show_fullscreen
@@ -466,31 +503,23 @@ img_fn_err   dta b(0)
 
 ?e_open lda #<me_open
         ldx #>me_open
-        jmp ?err_exit
+        bne ?err_exit          ; always (hi byte != 0)
 ?e_hdr  jsr ?err_cleanup
         ; Patch error code digit into message string
         lda img_err_code
-        clc
-        adc #'0'
+        ora #'0'               ; 1-8
         sta me_hdr_n
         ; Patch FN error as hex into message
         lda img_fn_err
-        lsr
-        lsr
-        lsr
-        lsr
-        jsr nibble_to_hex
+        jsr byte_to_hex
         sta me_hdr_h
-        lda img_fn_err
-        and #$0F
-        jsr nibble_to_hex
-        sta me_hdr_h+1
+        stx me_hdr_h+1
         lda #<me_hdr
         ldx #>me_hdr
         jmp ui_show_error
 ?e_alloc lda #<me_alloc
         ldx #>me_alloc
-        jmp ?err_exit
+        bne ?err_exit          ; always
 ?e_pal  lda #<me_pal
         ldx #>me_pal
 ?err_exit
@@ -500,6 +529,20 @@ img_fn_err   dta b(0)
         jsr fn_close
         jmp img_restore_url
 
+ .if 1                          ; 2026-09-23 (one status bar for everything)
+m_imgview dta c' Image',1,c'any key  Back',0
+m_step1  dta c' Image: resolving the URL...',1,c'Key  Stop',0
+m_step2  dta c' Image: connecting...',1,c'Key  Stop',0
+m_step3  dta c' Image: reading the header...',1,c'Key  Stop',0
+m_step5  dta c' Image: reading the palette...',1,c'Key  Stop',0
+m_step6  dta c' Image: reading pixels...',1,c'Key  Stop',0
+me_open  dta c' Image: cannot open it',1,c'any key',0
+me_hdr   dta c' Image: bad header '
+me_hdr_n dta c'? FN=$'
+me_hdr_h dta c'??',1,c'any key',0
+me_alloc dta c' Image: too big for VRAM',1,c'any key',0
+me_pal   dta c' Image: palette error',1,c'any key',0
+ .else
 m_imgview dta c' Image - press any key',0
 m_step1  dta c' IMG: resolving URL...',0
 m_step2  dta c' IMG: connecting...',0
@@ -512,6 +555,7 @@ me_hdr_n dta c'? FN=$'
 me_hdr_h dta c'??',0
 me_alloc dta c'IMG err: VRAM alloc',0
 me_pal   dta c'IMG err: palette',0
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -540,6 +584,176 @@ me_pal   dta c'IMG err: palette',0
         rts
 .endp
 
+; ----------------------------------------------------------------------------
+; Compact images (vbxe.php &c=1): the converter sends only the image's own
+; width w (<= 320) instead of black-padded 320-byte rows, so narrow images
+; cross SIO in fewer bytes. The rows stream to the END of the image area
+; (img_stage) and one blit list moves them to centred 320-byte rows and
+; blacks the margins (img_center). The move runs forward with every
+; destination below its source, so no unread byte is overwritten.
+; ----------------------------------------------------------------------------
+IMG_ROW   = 320
+
+.proc img_stage
+        jsr img_margin         ; m = 320 - w (0: full width, nothing to do)
+        beq ?done
+        ; img_vram = VRAM_IMG_BASE + h * m (24-bit)
+        ldx img_hdr_h
+?mul    lda img_vram
+        clc
+        adc img_m
+        sta img_vram
+        lda img_vram+1
+        adc img_m+1
+        sta img_vram+1
+        bcc ?nc
+        inc img_vram+2
+?nc     dex
+        bne ?mul
+?done   rts
+.endp
+
+; img_m = 320 - img_hdr_w; Z=1 when 0
+.proc img_margin
+        lda #<IMG_ROW
+        sec
+        sbc img_hdr_w
+        sta img_m
+        lda #>IMG_ROW
+        sbc img_hdr_w+1
+        sta img_m+1
+        ora img_m
+        rts
+.endp
+
+.proc img_center
+        lda img_vram           ; source = the staged rows
+        sta ?b_src
+        lda img_vram+1
+        sta ?b_src+1
+        lda img_vram+2
+        sta ?b_src+2
+        lda #<VRAM_IMG_BASE    ; the image is shown from the base again
+        sta img_vram
+        lda #>VRAM_IMG_BASE
+        sta img_vram+1
+        lda #0
+        sta img_vram+2
+        jsr img_margin
+        jeq ?done
+
+        ; left = m / 2, right = m - left (>= 1)
+        lda img_m+1
+        lsr
+        lda img_m
+        ror
+        sta ?left              ; m <= 312: left <= 156
+        lda img_m
+        sec
+        sbc ?left
+        sta ?right             ; right <= 156 (8-bit)
+
+        ; BCB 1: move w x h, source step w, dest step 320, dest base+left
+        lda img_hdr_w
+        sta ?b_sstep
+        sec
+        sbc #1
+        sta ?b_w1
+        lda img_hdr_w+1
+        sta ?b_sstep+1
+        sbc #0
+        sta ?b_w1+1
+        ldx img_hdr_h
+        dex
+        stx ?b_h1
+        stx ?r_h1
+        stx ?l_h1
+        lda #<VRAM_IMG_BASE
+        clc
+        adc ?left
+        sta ?b_dst
+        lda #>VRAM_IMG_BASE
+        adc #0
+        sta ?b_dst+1
+        ; BCB 2: right margin at base + left + w, width right
+        lda ?b_dst
+        clc
+        adc img_hdr_w
+        sta ?r_dst
+        lda ?b_dst+1
+        adc img_hdr_w+1
+        sta ?r_dst+1
+        ldx ?right
+        dex
+        stx ?r_w1
+        ; BCB 3: left margin at base, width left (chained only if left > 0)
+        lda #0                 ; no left margin: the list ends at BCB 2
+        ldx ?left
+        beq ?noleft
+        dex
+        stx ?l_w1
+        lda #8                 ; chain on
+?noleft sta ?r_ctl             ; A = 0 when left = 0: the list ends here
+
+        ; Copy the 3 BCBs to VRAM through the image writer, then run them
+        ldx #?bcb_len-1
+?cp     lda ?bcb,x
+        sta img_big_buf,x
+        dex
+        bpl ?cp
+        lda #?bcb_len
+        sta img_chunk_lo
+        lda #0
+        sta img_chunk_hi
+        sta img_wr_bank        ; VRAM_IMG_BCB is in bank 0
+        lda #<(MEMB_BASE + VRAM_IMG_BCB)
+        sta zp_img_ptr
+        lda #>(MEMB_BASE + VRAM_IMG_BCB)
+        sta zp_img_ptr+1
+        jsr vbxe_img_write_big
+        lda #<VRAM_IMG_BCB     ; started, not waited for: palette and
+        ldx #>VRAM_IMG_BCB     ; status bar go on meanwhile (the next
+        jmp blit_go            ; blit_run waits for it first)
+?done   rts
+
+?left   dta 0
+?right  dta 0
+?bcb
+        ; move: staged rows -> centred rows
+?b_src  dta 0, 0, 0
+?b_sstep dta a(0)              ; source step Y = w
+        dta 1
+?b_dst  dta 0, 0, 0
+        dta a(IMG_ROW)
+        dta 1
+?b_w1   dta a(0)               ; width - 1 = w - 1
+?b_h1   dta 0
+        dta $FF, $00, $00, 0, $00
+        dta $08                ; chain
+        ; right margin: black
+        dta 0, 0, 0, a(0), 0
+?r_dst  dta 0, 0, 0
+        dta a(IMG_ROW)
+        dta 1
+?r_w1   dta a(0)
+?r_h1   dta 0
+        dta $00, COL_BLACK, $00, 0, $00   ; AND 0, XOR = colour: fill
+?r_ctl  dta $08
+        ; left margin: black
+        dta 0, 0, 0, a(0), 0
+        dta <VRAM_IMG_BASE, >VRAM_IMG_BASE, 0
+        dta a(IMG_ROW)
+        dta 1
+?l_w1   dta a(0)
+?l_h1   dta 0
+        dta $00, COL_BLACK, $00, 0, $00
+        dta $00
+?bcb_len = * - ?bcb
+        ert VRAM_IMG_BCB + ?bcb_len > VRAM_FONT
+.endp
+
+img_m   dta a(0)
+
 ; Image URL prefix/suffix (global, used by img_resolve_and_build_url)
-m_prefix dta c'N:http://turiecfoto.sk/vbxe.php?url=',0
-m_suffix dta c'&w=320&h=208&iw=320',0
+m_prefix dta c'N:https://turiecfoto.sk/cactus/vbxe.php?url=',0   ; http -> 301
+m_suffix dta c'&w=320&h=208&iw=320&c=1',0  ; c=1: image-wide rows (img_center)

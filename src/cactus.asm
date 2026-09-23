@@ -19,6 +19,7 @@
 ; Entry point
 ; ============================================================================
 .proc main
+        cld                    ; decimal mode is not reset by the OS
         lda #0
         sta SDMCTL
         sei
@@ -32,6 +33,7 @@
 
         jsr vbxe_detect
         bcc no_vbxe
+        jsr memac_patch        ; MEMAC B stores -> the detected register page
 
         jsr vbxe_init
         cli
@@ -39,7 +41,14 @@
         jsr kbd_init
         jsr mouse_init
         jsr history_init
+ .if 1                          ; 2026-09-23 (settings saved on disk)
         jsr bk_load
+        jsr set_load           ; proxy on/off from D1: sector 715
+ .else
+        jsr bk_load
+ .endif
+        lda #0
+        sta cur_page_url       ; no page loaded yet (buffer is uninitialized)
         jsr html_reset
         jsr render_reset
         jsr show_welcome
@@ -60,8 +69,7 @@ no_vbxe cli
         sta ICBAH
         lda #18              ; string length
         sta ICBLL
-        lda #0
-        sta ICBLH
+        stx ICBLH            ; X = 0
         jsr CIOV
         ; Wait for keypress then cold start
 ?wk     lda CH
@@ -81,12 +89,14 @@ is_pal  dta b(1)             ; 1=PAL, 0=NTSC (default PAL)
         icl 'vbxe_detect.asm'
         icl 'vbxe_init.asm'
         icl 'vbxe_text.asm'
-        icl 'bookmarks.asm'
         icl 'find.asm'
         icl 'vbxe_gfx.asm'
+        ; --- everything below this line is above $4000 (no MEMAC B code) ---
+        icl 'bookmarks.asm'    ; no memb_on/off — VRAM via vbxe_* helpers
         icl 'fujinet.asm'
         icl 'http.asm'
         icl 'url.asm'
+        icl 'vbxe_pal.asm'
         icl 'html_parser.asm'
         icl 'html_tags.asm'
         icl 'html_entities.asm'

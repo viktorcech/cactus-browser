@@ -1,12 +1,14 @@
 ; ============================================================================
 ; Mouse Module - Atari ST mouse driver via joystick port
-; Timer 1 IRQ for fast quadrature sampling (GOS-style lookup table)
+; Timer 2 IRQ for fast quadrature sampling (GOS-style lookup table)
 ; VBI for applying accumulated movement to text cursor
 ; Based on flashjazzcat's GOS mouse driver + PAD game + xlpaint
 ;
 ; MEMAC B safety: This module is above $4000 (in MEMAC B window).
-; - Interrupt handlers use entry/exit stubs at page 6 ($0600)
-; - VRAM access uses vbxe_read_vram/vbxe_write_vram (below $4000)
+; - The timer IRQ runs entirely from page 6 with its tables at $8300+
+;   (outside the window), so it never touches MEMAC B
+; - The VBI uses entry/exit stubs at page 6 to disable/restore MEMAC B
+; - VRAM access uses vbxe_cell_get/vbxe_cell_put (below $4000)
 ; - NO memb_on/memb_off in this file!
 ; ============================================================================
 
@@ -29,27 +31,22 @@ VTIMR2     = $0212             ; Timer 2 IRQ vector
 zp_mouse_x    = $B0            ; text column 0-79
 zp_mouse_y    = $B1            ; text row 0-23
 zp_mouse_btn  = $B2            ; 0=none, 1=clicked
+zp_mouse_old  = $B3            ; last port nibble (timer IRQ)
 zp_mouse_dx   = $B4            ; accumulated X delta (signed, reset each VBI)
 zp_mouse_dy   = $B5            ; accumulated Y delta (signed, reset each VBI)
 zp_mouse_prev_x = $B6          ; previous cursor col
 zp_mouse_prev_y = $B7          ; previous cursor row
 
 ; ----------------------------------------------------------------------------
-; Page 6 stub layout ($0600):
-; Timer IRQ: OS only saves A, so entry must save Y (TYA PHA) before LDY #$5D.
-; VBI (NMI): OS saves A,X,Y — XITVBV restores them, no extra save needed.
-; Each interrupt saves zp_memb_shadow, clears it, disables MEMAC B register,
-; then restores shadow+register on exit. No MEMAC B register reads.
-;   $0600: Timer IRQ entry (17 bytes) - save Y, save shadow, disable MEMAC B
-;   $0611: Timer IRQ exit (12 bytes) - restore shadow+MEMAC B, restore Y+A, RTI
-;   $061D: VBI entry (15 bytes) - save shadow, disable MEMAC B
-;   $062C: VBI exit (13 bytes) - restore shadow+MEMAC B, JMP XITVBV
-; Total: 57 bytes
+; Page 6 stubs ($0600), copied from mouse_stubs by mouse_install_stubs:
+;   Timer IRQ: the whole handler (OS saved A; it saves Y itself)
+;   VBI entry: save shadow, disable MEMAC B, jmp mouse_vbi (OS saved A,X,Y)
+;   VBI exit:  restore shadow + MEMAC B, jmp XITVBV
+; Shadow save/restore keeps a VBI nested inside MEMAC B code safe.
 ; ----------------------------------------------------------------------------
 STUB_BASE       = $0600
-STUB_TIRQ_EXIT  = STUB_BASE + 17
-STUB_VBI_ENTRY  = STUB_BASE + 29
-STUB_VBI_EXIT   = STUB_BASE + 44
+STUB_VBI_ENTRY  = STUB_BASE + mst_vbi_entry - mouse_stubs
+STUB_VBI_EXIT   = STUB_BASE + mst_vbi_exit - mouse_stubs
 
 ; ----------------------------------------------------------------------------
 ; mouse_init
@@ -67,40 +64,24 @@ STUB_VBI_EXIT   = STUB_BASE + 44
         sta zp_mouse_dx
         sta zp_mouse_dy
         sta zp_memb_shadow
-        sta zp_tirq_saved
         sta zp_vbi_saved
 
-        ; Read initial port state and prepare old_x/old_y (pre-shifted <<2)
+        ; Initial port nibble
         lda PORTA
     .if MOUSE_PORT2
         lsr
         lsr
         lsr
         lsr
+    .else
+        and #$0F
     .endif
-        and #$03
-        asl
-        asl
-        sta mouse_old_x
-
-        lda PORTA
-    .if MOUSE_PORT2
-        lsr
-        lsr
-        lsr
-        lsr
-    .endif
-        lsr
-        lsr
-        and #$03
-        asl
-        asl
-        sta mouse_old_y
+        sta zp_mouse_old
 
         ; Install all stubs at page 6
         jsr mouse_install_stubs
 
-        ; Install Timer 1 IRQ via entry stub
+        ; Install Timer 2 IRQ (the page 6 handler)
         sei
         lda #<STUB_BASE
         sta VTIMR2
@@ -130,165 +111,98 @@ STUB_VBI_EXIT   = STUB_BASE + 44
 .endp
 
 ; ----------------------------------------------------------------------------
-; mouse_install_stubs - Copy all 4 stubs to page 6 and patch JMP targets
-; Timer IRQ: OS only saves A → entry must TYA PHA to save Y before LDY #$5D.
-; VBI (NMI): OS saves A,X,Y → XITVBV restores, no extra save needed.
-; Shadow save/restore prevents race condition when VBI nests inside Timer IRQ.
+; mouse_install_stubs - Copy the stubs to page 6 and patch the VBI jump
 ; ----------------------------------------------------------------------------
 .proc mouse_install_stubs
-        ; Copy entire template to page 6
-        ldy #0
-?lp     lda ?stubs,y
+        ldy #mst_end-mouse_stubs-1
+?lp     lda mouse_stubs,y
         sta STUB_BASE,y
-        iny
-        cpy #?stubs_end-?stubs
-        bne ?lp
-
-        ; Patch Timer IRQ entry: JMP target at offset 15,16
-        lda #<mouse_timer_irq
-        sta STUB_BASE+15
-        lda #>mouse_timer_irq
-        sta STUB_BASE+16
-
-        ; Patch VBI entry: JMP target at offset 42,43
+        dey
+        bpl ?lp
         lda #<mouse_vbi
-        sta STUB_BASE+42
+        sta STUB_BASE+mst_vbi_jmp-mouse_stubs+1
         lda #>mouse_vbi
-        sta STUB_BASE+43
+        sta STUB_BASE+mst_vbi_jmp-mouse_stubs+2
         rts
-
-        ; === Stub templates (57 bytes total) ===
-
-        ; Timer IRQ entry (offset 0, 17 bytes)
-        ; OS only saved A → we must save Y too!
-        ; Save Y, save shadow, clear shadow+MEMAC B, JMP handler
-?stubs
-        tya                    ; 98       save original Y
-        pha                    ; 48       (on stack, below OS-saved A)
-        lda zp_memb_shadow     ; A5 AD   read shadow
-        sta zp_tirq_saved      ; 85 AE   save to timer copy
-        lda #0                 ; A9 00
-        sta zp_memb_shadow     ; 85 AD   clear shadow
-        ldy #VBXE_MEMAC_B     ; A0 5D
-        sta (zp_vbxe_base),y  ; 91 80   disable MEMAC B
-        jmp $0000              ; 4C xx xx (patched)
-
-        ; Timer IRQ exit (offset 17, 12 bytes)
-        ; Restore shadow+MEMAC B, then pop Y and A, RTI
-        ; NOTE: Y=$5D here (handler restores it from its own push)
-        lda zp_tirq_saved      ; A5 AE   saved shadow
-        sta zp_memb_shadow     ; 85 AD   restore shadow
-        beq *+4                ; F0 02   skip STA if shadow was 0
-        sta (zp_vbxe_base),y  ; 91 80   restore MEMAC B (Y=$5D)
-        pla                    ; 68       pop original Y
-        tay                    ; A8       restore Y
-        pla                    ; 68       pop original A (from OS)
-        rti                    ; 40
-
-        ; VBI entry (offset 29, 15 bytes)
-        ; OS saves A,X,Y → no extra reg saves needed
-        ; Save shadow, clear shadow+MEMAC B, JMP handler
-        lda zp_memb_shadow     ; A5 AD
-        sta zp_vbi_saved       ; 85 AF
-        lda #0                 ; A9 00
-        sta zp_memb_shadow     ; 85 AD
-        ldy #VBXE_MEMAC_B     ; A0 5D
-        sta (zp_vbxe_base),y  ; 91 80
-        jmp $0000              ; 4C xx xx (patched)
-
-        ; VBI exit (offset 44, 13 bytes)
-        ; Restore shadow+MEMAC B, JMP XITVBV (restores A,X,Y)
-        lda zp_vbi_saved       ; A5 AF
-        sta zp_memb_shadow     ; 85 AD
-        beq *+6                ; F0 04   skip if was 0
-        ldy #VBXE_MEMAC_B     ; A0 5D
-        sta (zp_vbxe_base),y  ; 91 80
-        jmp XITVBV             ; 4C 62 E4
-?stubs_end
 .endp
 
-; ----------------------------------------------------------------------------
-; mouse_timer_irq - Timer 1 ISR: sample PORTA, decode quadrature
-; Uses GOS-style 16-entry lookup table (old<<2 | new) for robustness
-; CRITICAL: Must save/restore X, Y. A saved by OS. Exit via stub.
-; ----------------------------------------------------------------------------
-.proc mouse_timer_irq
-        ; NOTE: A already saved by OS IRQ handler before jumping to VTIMR1
-        ; NOTE: MEMAC B disabled by entry stub at page 6
-        txa
-        pha
+; === Stub templates: position independent (relative branches only) ===
+; Timer 2 IRQ, sampled at ~985 Hz: decode both quadrature axes with one
+; table read. Reads only zero page, PORTA and the $8300+ tables, so it runs
+; safely with the MEMAC B window open.
+mouse_stubs
         tya
         pha
-
-        ; Read port once
         lda PORTA
     .if MOUSE_PORT2
-        lsr
-        lsr
-        lsr
-        lsr
+        and #$F0               ; new nibble << 4
+    .else
+        asl
+        asl
+        asl
+        asl
     .endif
-        tax                    ; X = full nibble (bits 0-3)
-
-        ; --- X axis ---
-        and #$03               ; A = new X bits (0-3)
-        ora mouse_old_x        ; combine with old<<2 = 4-bit index
-        tay
-        lda mouse_movtab,y     ; get delta: 0, 1, or $FF(-1)
-        beq ?xd
-        bmi ?xl
-        inc zp_mouse_dx        ; +1 = move right
-        jmp ?xd
-?xl     dec zp_mouse_dx        ; -1 = move left
-?xd
-        ; Update old_x = new_bits << 2
-        txa
-        and #$03
-        asl
-        asl
-        sta mouse_old_x
-
-        ; --- Y axis ---
-        txa
-        lsr
-        lsr
-        and #$03               ; A = new Y bits (0-3)
-        ora mouse_old_y
-        tay
-        lda mouse_movtab,y
-        beq ?yd
-        bmi ?yu
-        inc zp_mouse_dy        ; +1 = move down
-        jmp ?yd
-?yu     dec zp_mouse_dy        ; -1 = move up
-?yd
-        ; Update old_y = new_bits << 2
-        txa
-        lsr
-        lsr
-        and #$03
-        asl
-        asl
-        sta mouse_old_y
-
+        ora zp_mouse_old
+        tay                    ; new<<4 | old
+        lda mouse_tab,y
+        bne mst_move
+mst_back   lda mouse_nib,y        ; old = new
+        sta zp_mouse_old
         pla
         tay
-        pla
-        tax
-        ; Exit via stub at page 6 (restores MEMAC B + PLA + RTI)
-        jmp STUB_TIRQ_EXIT
+        pla                    ; A saved by the OS IRQ handler
+        rti
+mst_move   lsr                    ; bit0: X+1
+        bcc mst_m1
+        inc zp_mouse_dx
+mst_m1     lsr                    ; bit1: X-1
+        bcc mst_m2
+        dec zp_mouse_dx
+mst_m2     lsr                    ; bit2: Y+1
+        bcc mst_m3
+        inc zp_mouse_dy
+mst_m3     lsr                    ; bit3: Y-1
+        bcc mst_back
+        dec zp_mouse_dy
+        bcs mst_back              ; always (C = 1)
 
-        ; GOS-style movement table (from flashjazzcat)
-        ; Index = (old_2bits << 2) | new_2bits
-        ; 0 = no movement, 1 = +1, $FF = -1
-mouse_movtab
-        dta 0,$FF,1,0, 1,0,0,$FF, $FF,0,0,1, 0,1,$FF,0
-.endp
+        ; VBI entry: OS saved A,X,Y
+mst_vbi_entry
+        cld
+        lda zp_memb_shadow
+        sta zp_vbi_saved
+        lda #0
+        sta zp_memb_shadow
+        ldy #VBXE_MEMAC_B
+        sta (zp_vbxe_base),y
+mst_vbi_jmp
+        jmp $0000              ; patched: mouse_vbi
+
+        ; VBI exit: restore shadow + MEMAC B, JMP XITVBV (restores A,X,Y)
+mst_vbi_exit
+        lda zp_vbi_saved
+        sta zp_memb_shadow
+        beq mst_x                 ; was off: register already 0
+        ldy #VBXE_MEMAC_B
+        sta (zp_vbxe_base),y
+mst_x      jmp XITVBV
+mst_end
+        ert mst_end-mouse_stubs>256
 
 ; ----------------------------------------------------------------------------
 ; mouse_vbi - Deferred VBI: apply accumulated deltas to cursor position
 ; Exit via stub at page 6 (restores MEMAC B, JMP XITVBV)
+;
+; Speed handling (per axis, per frame):
+; - Slow movement (|delta| < MOUSE_ACCEL): half speed, but the leftover
+;   count is carried over to the next frame instead of being truncated.
+;   The old code dropped it — a delta of 1 became 0, so slow precise
+;   movements didn't move the cursor at all until you sped up.
+; - Fast movement (|delta| >= MOUSE_ACCEL): full delta, no division —
+;   2x faster sweeps (simple acceleration).
 ; ----------------------------------------------------------------------------
+MOUSE_ACCEL = 6                ; counts/frame where acceleration kicks in
+
 .proc mouse_vbi
         ; --- Apply X delta (signed) ---
         lda zp_mouse_dx
@@ -299,28 +213,36 @@ mouse_movtab
         eor #$FF
         clc
         adc #1                 ; A = abs(dx)
-        lsr                    ; divide by 2
-        beq ?x_clr
-        sta ?steps
-?xl_lp  lda zp_mouse_x
-        beq ?x_clr
-        dec zp_mouse_x
-        dec ?steps
-        bne ?xl_lp
-        jmp ?x_clr
+        ldx #0
+        stx zp_mouse_dx        ; consume (leftover may be put back below)
+        cmp #MOUSE_ACCEL
+        bcs ?xn_go             ; fast: use full delta
+        lsr                    ; slow: half, C = leftover count
+        bcc ?xn_go
+        ldx #$FF
+        stx zp_mouse_dx        ; carry leftover (-1) to next frame
+?xn_go  eor #$FF                ; x - n = x + ~n + 1, clamped at the left edge
+        sec
+        adc zp_mouse_x
+        bcs ?xl
+        lda #0
+?xl     sta zp_mouse_x
+        bpl ?do_y              ; always (x <= 79)
 
-?x_pos  lsr                    ; divide by 2
-        beq ?x_clr
-        sta ?steps
-?xr_lp  lda zp_mouse_x
-        cmp #SCR_COLS-1
-        bcs ?x_clr
-        inc zp_mouse_x
-        dec ?steps
-        bne ?xr_lp
-
-?x_clr  lda #0
-        sta zp_mouse_dx
+?x_pos  ldx #0
+        stx zp_mouse_dx        ; consume (leftover may be put back below)
+        cmp #MOUSE_ACCEL
+        bcs ?xp_go             ; fast: use full delta
+        lsr                    ; slow: half, C = leftover count
+        bcc ?xp_go
+        ldx #1
+        stx zp_mouse_dx        ; carry leftover (+1) to next frame
+?xp_go  clc                    ; x + n, clamped at the right edge
+        adc zp_mouse_x         ; (<= 79 + 5 / 2: no overflow)
+        cmp #SCR_COLS
+        bcc ?xr
+        lda #SCR_COLS-1
+?xr     sta zp_mouse_x
 
         ; --- Apply Y delta (signed) ---
 ?do_y   lda zp_mouse_dy
@@ -329,29 +251,37 @@ mouse_movtab
 
         eor #$FF
         clc
-        adc #1
+        adc #1                 ; A = abs(dy)
+        ldx #0
+        stx zp_mouse_dy
+        cmp #MOUSE_ACCEL
+        bcs ?yn_go
         lsr
-        beq ?y_clr
-        sta ?steps
-?yu_lp  lda zp_mouse_y
-        beq ?y_clr
-        dec zp_mouse_y
-        dec ?steps
-        bne ?yu_lp
-        jmp ?y_clr
+        bcc ?yn_go
+        ldx #$FF
+        stx zp_mouse_dy        ; carry leftover (-1)
+?yn_go  eor #$FF                ; y - n, clamped at the top edge
+        sec
+        adc zp_mouse_y
+        bcs ?yu
+        lda #0
+?yu     sta zp_mouse_y
+        bpl ?btn               ; always (y <= 28)
 
-?y_pos  lsr
-        beq ?y_clr
-        sta ?steps
-?yd_lp  lda zp_mouse_y
-        cmp #SCR_ROWS-1
-        bcs ?y_clr
-        inc zp_mouse_y
-        dec ?steps
-        bne ?yd_lp
-
-?y_clr  lda #0
-        sta zp_mouse_dy
+?y_pos  ldx #0
+        stx zp_mouse_dy
+        cmp #MOUSE_ACCEL
+        bcs ?yp_go
+        lsr
+        bcc ?yp_go
+        ldx #1
+        stx zp_mouse_dy        ; carry leftover (+1)
+?yp_go  clc                    ; y + n, clamped at the bottom edge
+        adc zp_mouse_y
+        cmp #SCR_ROWS
+        bcc ?yd
+        lda #SCR_ROWS-1
+?yd     sta zp_mouse_y
 
         ; --- Button ---
 ?btn
@@ -366,16 +296,16 @@ mouse_movtab
 ?no_btn
         ; Exit via stub at page 6 (restores MEMAC B, JMP XITVBV)
         jmp STUB_VBI_EXIT
-
-?steps  dta 0
 .endp
 
-mouse_old_x     dta 0          ; old X bits, pre-shifted <<2
-mouse_old_y     dta 0          ; old Y bits, pre-shifted <<2
 
 ; ----------------------------------------------------------------------------
 ; mouse_show_cursor - Update cursor on screen (call from main loop)
 ; ----------------------------------------------------------------------------
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: the whole proc in one page, the taken
+                                ; branches do not cross)
+        page_fit 0, mouse_show_cursor.pend-mouse_show_cursor
+ .endif
 .proc mouse_show_cursor
         lda zp_mouse_prev_x
         cmp zp_mouse_x
@@ -403,6 +333,7 @@ mouse_old_y     dta 0          ; old Y bits, pre-shifted <<2
         lda zp_mouse_y
         sta zp_mouse_prev_y
 ?done   rts
+pend
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -427,48 +358,23 @@ mouse_old_y     dta 0          ; old Y bits, pre-shifted <<2
 .proc mouse_invert_char
         jsr mouse_calc_vram    ; zp_tmp_ptr set, Y = col*2
         sty mouse_col_off
-
-        ; Read char
-        ldy mouse_col_off
-        jsr vbxe_read_vram
+        jsr vbxe_cell_get      ; A = char, X = attr
         sta mouse_saved_char
-
-        ; Write inverted char
-        lda mouse_saved_char
-        ora #$80
+        stx mouse_saved_attr
+        ora #$80               ; inverted char, red attr
+        ldx #COL_RED
         ldy mouse_col_off
-        jsr vbxe_write_vram
-
-        ; Read attr
-        ldy mouse_col_off
-        iny
-        jsr vbxe_read_vram
-        sta mouse_saved_attr
-
-        ; Write red attr
-        lda #COL_RED
-        ldy mouse_col_off
-        iny
-        jmp vbxe_write_vram
+        jmp vbxe_cell_put
 .endp
 
 ; ----------------------------------------------------------------------------
 ; mouse_restore_char - Restore char+attr at A=row, X=col
 ; ----------------------------------------------------------------------------
 .proc mouse_restore_char
-        jsr mouse_calc_vram
-        sty mouse_col_off
-
-        ; Write saved char
+        jsr mouse_calc_vram    ; Y = col*2
         lda mouse_saved_char
-        ldy mouse_col_off
-        jsr vbxe_write_vram
-
-        ; Write saved attr
-        lda mouse_saved_attr
-        ldy mouse_col_off
-        iny
-        jmp vbxe_write_vram
+        ldx mouse_saved_attr
+        jmp vbxe_cell_put
 .endp
 
 mouse_saved_char dta 0
@@ -481,17 +387,14 @@ mouse_col_off    dta 0
 ; ----------------------------------------------------------------------------
 .proc mouse_calc_vram
         tay
-        txa
-        asl
-        sta ?col2
         lda row_addr_lo,y      ; from vbxe_text.asm (below $4000)
         sta zp_tmp_ptr
         lda row_addr_hi,y
         sta zp_tmp_ptr+1
-        ldy ?col2
+        txa
+        asl
+        tay
         rts
-
-?col2   dta 0
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -504,14 +407,10 @@ mouse_col_off    dta 0
         ; mouse_saved_attr has the original attr from cursor position
         ; Output: C=0 A=link#, C=1 not on link
         lda mouse_saved_attr
-        cmp #ATTR_LINK_BASE
-        bcc ?no                ; < $20 = not a link
-        cmp #ATTR_LINK_BASE+MAX_LINKS
-        bcs ?no                ; >= $40 = not a link
-        sec
+        sec                    ; range test: C = 0 inside [$20, $5F]
         sbc #ATTR_LINK_BASE    ; A = link number
-        clc
-        rts
-?no     sec
-        rts
+        cmp #MAX_LINKS         ; (attrs below $20 wrap to >= $E0)
+        bcc ?yes
+        lda mouse_saved_attr   ; not a link: A = attr as before (C = 1)
+?yes    rts
 .endp

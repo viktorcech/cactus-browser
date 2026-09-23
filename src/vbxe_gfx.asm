@@ -67,109 +67,156 @@ img_wr_bank    dta b(0)        ; MEMAC B bank number
 ; Input: zp_rx_len = number of bytes in rx_buffer
 ; ----------------------------------------------------------------------------
 .proc vbxe_img_write_chunk
-        lda zp_rx_len
+        ldx zp_rx_len
         beq ?done
+        stx img_chunk_lo       ; rx_buffer[0..n-1] -> img_big_buf, then the
+        lda #0                 ; block copy (same pointer / bank handling)
+        sta img_chunk_hi
+?cp     lda rx_buffer-1,x
+        sta img_big_buf-1,x
+        dex
+        bne ?cp
+        jmp vbxe_img_write_big
+?done   rts
+.endp
+
+; ----------------------------------------------------------------------------
+; vbxe_img_write_big - Copy img_big_buf to VRAM, 16-bit count, block copy
+; Companion to fn_read_img: handles large (up to 2KB) chunks that
+; fn_read_img deposits into img_big_buf.
+;
+; Input: img_chunk_lo/hi = byte count (PRESERVED), zp_img_ptr/img_wr_bank set
+; Source: img_big_buf (at $B724, above $7FFF — unaffected by MEMAC B)
+; Dest: VBXE VRAM via MEMAC B window ($4000-$7FFF)
+; MUST be below $4000 (executes with MEMAC B active)
+; Copies in blocks of up to 256 bytes that never cross the $8000 bank
+; boundary — inner loop is ~19 cycles/byte vs ~53 in the old per-byte
+; version (saves ~1.3s on a fullscreen 64KB image).
+; Uses: zp_tmp_ptr (src), zp_tmp1 (block size, 0=256), zp_tmp2/3 (remaining)
+; ----------------------------------------------------------------------------
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: the per-block branches to ?haveb
+                                ; and the copy loop in one page)
+        page_fit vbxe_img_write_big.blk-vbxe_img_write_big, vbxe_img_write_big.cp_end-vbxe_img_write_big.blk
+ .else
+        page_fit vbxe_img_write_big.cp_loop-vbxe_img_write_big, vbxe_img_write_big.cp_end-vbxe_img_write_big.cp_loop
+ .endif
+.proc vbxe_img_write_big
+        lda img_chunk_lo
+        sta zp_tmp2
+        ora img_chunk_hi
+        bne ?go
+        rts
+?go     lda img_chunk_hi
+        sta zp_tmp3
+        lda #<img_big_buf      ; source (16-bit, advanced per block)
+        sta ?srcl
+        lda #>img_big_buf
+        sta ?srch
 
         sei
         lda img_wr_bank
         ora #$80
-        sta zp_memb_shadow     ; shadow FIRST (VBI is NMI, can't mask!)
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
+        sta zp_memb_shadow     ; shadow FIRST (VBI is NMI!)
+        memb_set
 
-        ldx #0
-?lp     ldy #0
-        lda rx_buffer,x
-        sta (zp_img_ptr),y
-        inc zp_img_ptr
-        bne ?nc
+blk
+?block  ; Block size = min(remaining, 256, space to $8000); 0 means 256
+        lda zp_tmp3
+        beq ?small
+        lda #0                 ; remaining >= 256: candidate = 256
+        beq ?cap
+?small  lda zp_tmp2            ; candidate = remaining (1-255)
+?cap    ; Cap at bank boundary: only possible when dest page = $7F
+        ldx zp_img_ptr+1
+        cpx #$7F
+        bne ?haveb
+        ldx zp_img_ptr
+        beq ?haveb             ; dest at $7F00: full 256 to boundary
+        sta zp_tmp1            ; save candidate
+        lda #0
+        sec
+        sbc zp_img_ptr         ; A = 256 - dest_lo = space to $8000 (1-255)
+        ldx zp_tmp1
+        beq ?haveb             ; candidate 256 -> take space
+        cmp zp_tmp1
+        bcc ?haveb             ; space < candidate -> take space
+        lda zp_tmp1
+?haveb  sta zp_tmp1
+
+        ; Copy with Y counting up to 0: both bases moved back by y0 = 256-n
+        eor #$FF
+        clc
+        adc #1                 ; y0 = -n (n = 256 -> 0)
+        sta ?y0
+        lda ?srcl
+        sec
+        sbc ?y0
+        sta ?cp+1
+        lda ?srch
+        sbc #0
+        sta ?cp+2
+        lda zp_img_ptr
+        sec
+        sbc ?y0
+        sta zp_tmp_ptr2
+        lda zp_img_ptr+1
+        sbc #0
+        sta zp_tmp_ptr2+1
+        ldy ?y0
+cp_loop
+?cp     lda $FFFF,y            ; RAM (above $7FFF)
+        sta (zp_tmp_ptr2),y    ; VRAM via MEMAC B
+        iny
+        bne ?cp
+cp_end
+        ert >?cp <> >*         ; the per-byte loop must not cross a page
+
+        ; Advance src/dest, decrement remaining (block 0 = 256)
+        lda zp_tmp1
+        bne ?adv
+        inc ?srch
         inc zp_img_ptr+1
+        dec zp_tmp3
+        jmp ?bank
+?adv    clc
+        adc ?srcl
+        sta ?srcl
+        bcc ?n1
+        inc ?srch
+?n1     lda zp_tmp1
+        clc
+        adc zp_img_ptr
+        sta zp_img_ptr
+        bcc ?n2
+        inc zp_img_ptr+1
+?n2     lda zp_tmp2
+        sec
+        sbc zp_tmp1
+        sta zp_tmp2
+        bcs ?bank
+        dec zp_tmp3
+
+?bank   ; Dest reached $8000 -> wrap to $4000, switch to next bank
         lda zp_img_ptr+1
         cmp #$80
-        bne ?nc
+        bne ?rem
         lda #$40
         sta zp_img_ptr+1
         inc img_wr_bank
         lda img_wr_bank
         ora #$80
         sta zp_memb_shadow     ; shadow FIRST
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
-?nc     inx
-        cpx zp_rx_len
-        bne ?lp
+        memb_set
+
+?rem    lda zp_tmp2
+        ora zp_tmp3
+        jne ?block
         memb_off
         cli
-?done   rts
-.endp
-
-; ----------------------------------------------------------------------------
-; vbxe_img_write_big - Copy img_big_buf to VRAM, 16-bit count
-; Companion to fn_read_img: handles large (up to 2KB) chunks that
-; fn_read_img deposits into img_big_buf. Uses 16-bit byte counter
-; instead of 8-bit zp_rx_len used by vbxe_img_write_chunk.
-;
-; Input: img_chunk_lo/hi = byte count, zp_img_ptr/img_wr_bank set
-; Source: img_big_buf (at $B724, above $7FFF — unaffected by MEMAC B)
-; Dest: VBXE VRAM via MEMAC B window ($4000-$7FFF)
-; MUST be below $4000 (executes with MEMAC B active)
-; Auto-switches VRAM banks when write pointer crosses $8000 boundary
-; ----------------------------------------------------------------------------
-.proc vbxe_img_write_big
-        lda img_chunk_lo
-        ora img_chunk_hi
-        beq ?done
-
-        ; Set source pointer
-        lda #<img_big_buf
-        sta zp_tmp_ptr
-        lda #>img_big_buf
-        sta zp_tmp_ptr+1
-
-        sei
-        lda img_wr_bank
-        ora #$80
-        sta zp_memb_shadow     ; shadow FIRST (VBI is NMI!)
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
-
-?lp     ldy #0
-        lda (zp_tmp_ptr),y    ; read from RAM (above $7FFF, safe)
-        sta (zp_img_ptr),y    ; write to VRAM via MEMAC B
-
-        ; Advance source
-        inc zp_tmp_ptr
-        bne ?ns
-        inc zp_tmp_ptr+1
-?ns
-        ; Advance VRAM dest (bank switch on $8000 boundary)
-        inc zp_img_ptr
-        bne ?nc
-        inc zp_img_ptr+1
-        lda zp_img_ptr+1
-        cmp #$80
-        bne ?nc
-        lda #$40
-        sta zp_img_ptr+1
-        inc img_wr_bank
-        lda img_wr_bank
-        ora #$80
-        sta zp_memb_shadow
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
-?nc
-        ; Decrement 16-bit counter
-        lda img_chunk_lo
-        bne ?dl
-        dec img_chunk_hi
-?dl     dec img_chunk_lo
-        lda img_chunk_lo
-        ora img_chunk_hi
-        bne ?lp
-
-        memb_off
-        cli
-?done   rts
+        rts
+?srcl   dta 0
+?srch   dta 0
+?y0     dta 0
 .endp
 
 ; ============================================================================
@@ -219,9 +266,38 @@ pb_read        dta b(0),b(0),b(0)   ; 24-bit bytes read so far
 .endp
 
 ; ----------------------------------------------------------------------------
+; vbxe_pb_write_big - Copy img_big_buf to VRAM page buffer, 16-bit count
+; Input: img_chunk_lo/hi = byte count (preserved by vbxe_img_write_big)
+; Used by http_download: page data arrives via fn_read_img in up-to-2KB
+; SIO chunks (8x fewer SIO calls than the old 255-byte fn_read path).
+; Loads page-buffer write state into the image write pointer, copies via
+; the fast vbxe_img_write_big block routine, then stores the state back.
+; Safe: page download and image fetch never run concurrently (dl_active).
+; Plain RAM ops + jsr, so this proc itself has no below-$4000 requirement.
+; ----------------------------------------------------------------------------
+.proc vbxe_pb_write_big
+        lda zp_pb_wr_ptr
+        sta zp_img_ptr
+        lda zp_pb_wr_ptr+1
+        sta zp_img_ptr+1
+        lda pb_wr_bank
+        sta img_wr_bank
+        jsr vbxe_img_write_big
+        lda zp_img_ptr
+        sta zp_pb_wr_ptr
+        lda zp_img_ptr+1
+        sta zp_pb_wr_ptr+1
+        lda img_wr_bank
+        sta pb_wr_bank
+        rts
+.endp
+
+; ----------------------------------------------------------------------------
 ; vbxe_pb_write_chunk - Copy rx_buffer to VRAM page buffer
-; Input: zp_rx_len = number of bytes in rx_buffer
-; Pattern identical to vbxe_img_write_chunk
+; Input: zp_rx_len = number of bytes in rx_buffer (1-255)
+; Block copy: since len <= 255, the $8000 bank boundary can only be hit
+; when the write pointer is in page $7F — split the copy there instead of
+; testing per byte (~18 cycles/byte vs ~28 in the old loop).
 ; ----------------------------------------------------------------------------
 .proc vbxe_pb_write_chunk
         lda zp_rx_len
@@ -231,126 +307,168 @@ pb_read        dta b(0),b(0),b(0)   ; 24-bit bytes read so far
         lda pb_wr_bank
         ora #$80
         sta zp_memb_shadow     ; shadow FIRST (VBI is NMI!)
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
+        memb_set
 
-        ldx #0
-?lp     ldy #0
-        lda rx_buffer,x
-        sta (zp_pb_wr_ptr),y
-        inc zp_pb_wr_ptr
-        bne ?nc
-        inc zp_pb_wr_ptr+1
+        ldy #0
         lda zp_pb_wr_ptr+1
-        cmp #$80
-        bne ?nc
-        lda #$40
-        sta zp_pb_wr_ptr+1
+        cmp #$7F
+        bne ?copy              ; below page $7F: cannot cross boundary
+        lda zp_pb_wr_ptr
+        beq ?copy              ; $7F00 + <=255 ends at most at $7FFF
+        eor #$FF
+        clc
+        adc #1                 ; A = 256 - ptr_lo = bytes until $8000
+        cmp zp_rx_len
+        bcs ?copy              ; whole chunk fits before boundary
+        sta ?split
+        ; Part 1: Y = 0..split-1 (up to the bank boundary)
+?lp1    lda rx_buffer,y
+        sta (zp_pb_wr_ptr),y
+        iny
+        cpy ?split
+        bne ?lp1
+        ; Switch bank, bias pointer so (ptr+Y) continues at $4000
         inc pb_wr_bank
         lda pb_wr_bank
         ora #$80
         sta zp_memb_shadow     ; shadow FIRST
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
-?nc     inx
-        cpx zp_rx_len
-        bne ?lp
-        memb_off
+        memb_set
+        lda #0
+        sec
+        sbc ?split
+        sta zp_pb_wr_ptr       ; ptr = $4000 - split
+        lda #$40
+        sbc #0
+        sta zp_pb_wr_ptr+1
+        ldy ?split
+        ; Part 2 continues in ?copy with Y = split
+
+?copy   cpy zp_rx_len
+        beq ?adv
+?lp2    lda rx_buffer,y
+        sta (zp_pb_wr_ptr),y
+        iny
+        cpy zp_rx_len
+        bne ?lp2
+
+?adv    ; Advance pointer; exact $8000 wraps to $4000 + next bank
+        lda zp_pb_wr_ptr
+        clc
+        adc zp_rx_len
+        sta zp_pb_wr_ptr
+        bcc ?nc
+        inc zp_pb_wr_ptr+1
+?nc     lda zp_pb_wr_ptr+1
+        cmp #$80
+        bne ?fin
+        lda #$40
+        sta zp_pb_wr_ptr+1
+        inc pb_wr_bank         ; bank register is reloaded on next call
+?fin    memb_off
         cli
 ?done   rts
+?split  dta 0
 .endp
 
 ; ----------------------------------------------------------------------------
 ; vbxe_pb_read_chunk - Copy VRAM page buffer to rx_buffer
 ; Input: A = number of bytes to read (max 255)
 ; Output: zp_rx_len = bytes read, rx_buffer filled
+; Same block-copy structure as vbxe_pb_write_chunk, direction reversed.
 ; ----------------------------------------------------------------------------
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: the branches to ?whole and the
+                                ; copy loop in one page)
+        page_fit vbxe_pb_read_chunk.wh_s-vbxe_pb_read_chunk, vbxe_pb_read_chunk.rd_end-vbxe_pb_read_chunk.wh_s
+ .else
+        page_fit vbxe_pb_read_chunk.rd_loop-vbxe_pb_read_chunk, vbxe_pb_read_chunk.rd_end-vbxe_pb_read_chunk.rd_loop
+ .endif
 .proc vbxe_pb_read_chunk
         sta zp_rx_len
         beq ?done
+        sta ?n
 
         sei
         lda pb_rd_bank
         ora #$80
         sta zp_memb_shadow     ; shadow FIRST (VBI is NMI!)
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
+        memb_set
+        lda #<(rx_buffer-1)
+        sta ?dst+1
+        lda #>(rx_buffer-1)
+        sta ?dst+2
 
-        ldx #0
-?lp     ldy #0
-        lda (zp_pb_rd_ptr),y
-        sta rx_buffer,x
-        inc zp_pb_rd_ptr
-        bne ?nc
-        inc zp_pb_rd_ptr+1
+        ; len <= 255: the $8000 bank end can only be hit from page $7F
+wh_s
         lda zp_pb_rd_ptr+1
-        cmp #$80
-        bne ?nc
-        lda #$40
-        sta zp_pb_rd_ptr+1
+        cmp #$7F
+        bne ?whole
+        lda zp_pb_rd_ptr
+        beq ?whole             ; $7F00 + <=255 ends at most at $7FFF
+        eor #$FF
+        adc #0                 ; C = 1 (cmp #$7F equal): A = 256 - ptr_lo
+        cmp zp_rx_len
+        bcs ?whole             ; whole chunk fits before boundary
+        sta ?n
+        jsr ?copy              ; part 1: up to the bank boundary
         inc pb_rd_bank
         lda pb_rd_bank
         ora #$80
         sta zp_memb_shadow     ; shadow FIRST
-        ldy #VBXE_MEMAC_B
-        sta (zp_vbxe_base),y
-?nc     inx
-        cpx zp_rx_len
-        bne ?lp
-        memb_off
+        memb_set
+        lda #>MEMB_BASE        ; continue at $4000 (lo byte is 0 after ?copy)
+        sta zp_pb_rd_ptr+1
+        lda ?dst+1             ; dst += part 1
+        clc
+        adc ?n
+        sta ?dst+1
+        bcc ?d2
+        inc ?dst+2
+?d2
+        lda zp_rx_len
+        sec
+        sbc ?n
+        sta ?n                 ; part 2 (>= 1)
+        jsr ?copy
+        jmp ?fin
+
+?whole  jsr ?copy
+        lda zp_pb_rd_ptr+1     ; exact $8000: wrap to $4000 + next bank
+        cmp #$80
+        bne ?fin
+        lda #$40
+        sta zp_pb_rd_ptr+1
+        inc pb_rd_bank         ; bank register is reloaded on next call
+?fin    memb_off
         cli
 ?done   rts
-.endp
 
-; ----------------------------------------------------------------------------
-; vbxe_img_setpal - Set image palette (always palette 1)
-; Input: zp_tmp_ptr = palette data (768 bytes)
-; Preserves colors 0-7 (text), writes colors 8-255 from image data
-; ----------------------------------------------------------------------------
-.proc vbxe_img_setpal
-        ; Select palette 1
-        ldy #VBXE_PSEL
-        lda #1
-        sta (zp_vbxe_base),y
-
-        ; Start at color 8 (preserve text colors 0-7)
-        ldy #VBXE_CSEL
-        lda #8
-        sta (zp_vbxe_base),y
-
-        ; Skip first 8 palette entries (24 bytes) in source data
+?copy   ; ?n bytes (1-255) from (zp_pb_rd_ptr) to ?dst+1..., Y counting down
+        lda zp_pb_rd_ptr
+        sec
+        sbc #1
+        sta zp_tmp_ptr2
+        lda zp_pb_rd_ptr+1
+        sbc #0
+        sta zp_tmp_ptr2+1
+        ldy ?n
+rd_loop
+?cp     lda (zp_tmp_ptr2),y
+?dst    sta $FFFF,y
+        dey
+        bne ?cp
+rd_end
+        ert >?cp <> >*         ; hot loop: keep it in one page
+        lda zp_pb_rd_ptr       ; ptr += n
         clc
-        lda zp_tmp_ptr
-        adc #24
-        sta zp_tmp_ptr
-        bcc ?ns
-        inc zp_tmp_ptr+1
-?ns     ldx #8
-
-?write  ; Write colors from X to 255
-        ldy #0
-        lda (zp_tmp_ptr),y     ; Red
-        ldy #VBXE_CR
-        sta (zp_vbxe_base),y
-        ldy #1
-        lda (zp_tmp_ptr),y     ; Green
-        ldy #VBXE_CG
-        sta (zp_vbxe_base),y
-        ldy #2
-        lda (zp_tmp_ptr),y     ; Blue
-        ldy #VBXE_CB
-        sta (zp_vbxe_base),y
-
-        clc
-        lda zp_tmp_ptr
-        adc #3
-        sta zp_tmp_ptr
+        adc ?n
+        sta zp_pb_rd_ptr
         bcc ?nc
-        inc zp_tmp_ptr+1
-?nc     inx
-        bne ?write             ; loops until X wraps to 0
-        rts
+        inc zp_pb_rd_ptr+1
+?nc     rts
+?n      dta 0
 .endp
+
+; vbxe_img_setpal moved to vbxe_pal.asm (register I/O only, no MEMAC B needed)
 
 ; ----------------------------------------------------------------------------
 ; vbxe_img_show_fullscreen - Show current image fullscreen
@@ -363,167 +481,100 @@ pb_read        dta b(0),b(0),b(0)   ; 24-bit bytes read so far
         sta img_active
 
         memb_on 0
-        ldx #0
-
-        ; --- Entry 1: top border + overlay init ---
-        lda #<(XDLC_OVOFF|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_CHBASE|XDLC_OVATT)
+        ; Entries 1 (top border + overlay init) and 2 (GMON image) from the
+        ; template, then the image height and address patched in
+        ldx #IMG_XDL_LEN-1
+?cp     lda img_xdl,x
         sta MEMB_XDL,x
-        inx
-        lda #>(XDLC_OVOFF|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_CHBASE|XDLC_OVATT)
-        sta MEMB_XDL,x
-        inx
-        lda #24-1
-        sta MEMB_XDL,x
-        inx
-        ; OVADR = VRAM_SCREEN
-        lda #<VRAM_SCREEN
-        sta MEMB_XDL,x
-        inx
-        lda #>VRAM_SCREEN
-        sta MEMB_XDL,x
-        inx
-        lda #0
-        sta MEMB_XDL,x
-        inx
-        ; STEP
-        lda #<SCR_STRIDE
-        sta MEMB_XDL,x
-        inx
-        lda #>SCR_STRIDE
-        sta MEMB_XDL,x
-        inx
-        ; CHBASE
-        lda #CHBASE_VAL
-        sta MEMB_XDL,x
-        inx
-        ; OVATT (palette 1 + NORMAL)
-        lda #$11
-        sta MEMB_XDL,x
-        inx
-        ; Priority
-        lda #$FF
-        sta MEMB_XDL,x
-        inx
-
-        ; --- Entry 2: GMON image ---
-        lda #<(XDLC_GMON|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_OVATT)
-        sta MEMB_XDL,x
-        inx
-        lda #>(XDLC_GMON|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_OVATT)
-        sta MEMB_XDL,x
-        inx
-        ; RPTL = height - 1
-        lda img_height
-        sec
-        sbc #1
-        sta MEMB_XDL,x
-        inx
-        ; OVADR = image VRAM address
+        dex
+        bpl ?cp
+        ldx img_height
+        dex
+        stx MEMB_XDL+13        ; RPTL = height - 1
         lda img_vram
-        sta MEMB_XDL,x
-        inx
+        sta MEMB_XDL+14
         lda img_vram+1
-        sta MEMB_XDL,x
-        inx
+        sta MEMB_XDL+15
         lda img_vram+2
-        sta MEMB_XDL,x
-        inx
-        ; STEP = 320 (NORMAL mode, converter always returns 320px wide)
-        lda #<320
-        sta MEMB_XDL,x
-        inx
-        lda #>320
-        sta MEMB_XDL,x
-        inx
-        ; OVATT: palette 1 + NORMAL
-        lda #$11
-        sta MEMB_XDL,x
-        inx
-        ; Priority
-        lda #$FF
-        sta MEMB_XDL,x
-        inx
+        sta MEMB_XDL+16
+        ldx #IMG_XDL_LEN
 
         ; --- Remaining scanlines below image ---
-        ; Calculate: remaining = 240 - 24 (border) - img_height
-        ; Total screen = 240 scanlines always (8 OVOFF + 232 TMON)
+        ; remaining = 240 - 24 (border) - img_height
         lda #240 - 24
         sec
         sbc img_height
         beq ?no_text           ; image fills screen exactly
         bmi ?no_text           ; image taller than screen (shouldn't happen)
-        ; If remaining > 8, add OVOFF gap entry first
         cmp #9
         bcc ?status_only       ; remaining <= 8, just status bar
 
         ; --- Entry 3: OVOFF gap (black area between image and status) ---
-        sec
-        sbc #8                 ; gap = remaining - 8 (status bar)
-        sec
-        sbc #1                 ; RPTL = gap - 1
-        pha
+        sbc #8+1               ; C = 1: RPTL = remaining - 8 - 1
+        tay
         lda #<(XDLC_OVOFF|XDLC_MAPOFF|XDLC_RPTL)
         sta MEMB_XDL,x
-        inx
         lda #>(XDLC_OVOFF|XDLC_MAPOFF|XDLC_RPTL)
-        sta MEMB_XDL,x
+        sta MEMB_XDL+1,x
+        tya
+        sta MEMB_XDL+2,x
         inx
-        pla
-        sta MEMB_XDL,x
+        inx
         inx
 
 ?status_only
         ; --- Status bar: TMON 8 scanlines (1 text row) + END ---
-        lda #<(XDLC_TMON|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_CHBASE|XDLC_OVATT|XDLC_END)
+ .if 1                          ; 2026-09-23 (6502-loops-tables-smc: index counting up to zero)
+        ldy #256-11
+?st     lda img_xdl_status+11-256,y
         sta MEMB_XDL,x
         inx
-        lda #>(XDLC_TMON|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_CHBASE|XDLC_OVATT|XDLC_END)
+        iny
+        bne ?st
+        beq ?done              ; always (Z = 1)
+ .else
+        ldy #0
+?st     lda img_xdl_status,y
         sta MEMB_XDL,x
         inx
-        lda #8-1               ; always 8 scanlines = 1 text row
-        sta MEMB_XDL,x
-        inx
-        ; OVADR = STATUS_ROW * SCR_STRIDE
-        lda #<(STATUS_ROW * SCR_STRIDE)
-        sta MEMB_XDL,x
-        inx
-        lda #>(STATUS_ROW * SCR_STRIDE)
-        sta MEMB_XDL,x
-        inx
-        lda #0
-        sta MEMB_XDL,x
-        inx
-        ; STEP
-        lda #<SCR_STRIDE
-        sta MEMB_XDL,x
-        inx
-        lda #>SCR_STRIDE
-        sta MEMB_XDL,x
-        inx
-        ; CHBASE
-        lda #CHBASE_VAL
-        sta MEMB_XDL,x
-        inx
-        ; OVATT (palette 1 + NORMAL)
-        lda #$11
-        sta MEMB_XDL,x
-        inx
-        ; Priority
-        lda #$FF
-        sta MEMB_XDL,x
-        jmp ?done
+        iny
+        cpy #11
+        bne ?st
+        beq ?done              ; always
+ .endif
 
 ?no_text
         ; Image fills full screen - just add END
         lda #<(XDLC_OVOFF|XDLC_END)
         sta MEMB_XDL,x
-        inx
         lda #>(XDLC_OVOFF|XDLC_END)
-        sta MEMB_XDL,x
+        sta MEMB_XDL+1,x
 
 ?done   memb_off
         rts
 
+img_xdl
+        ; Entry 1: top border + overlay init (24 lines)
+        dta a(XDLC_OVOFF|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_CHBASE|XDLC_OVATT)
+        dta 24-1
+        dta <VRAM_SCREEN, >VRAM_SCREEN, 0
+        dta a(SCR_STRIDE)
+        dta CHBASE_VAL
+        dta $11, $FF           ; palette 1 + NORMAL, priority
+        ; Entry 2: GMON image (RPTL and OVADR patched)
+        dta a(XDLC_GMON|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_OVATT)
+        dta 0
+        dta 0, 0, 0
+        dta a(320)             ; converter always returns 320 px wide
+        dta $11, $FF
+IMG_XDL_LEN = * - img_xdl
+img_xdl_status
+        dta a(XDLC_TMON|XDLC_MAPOFF|XDLC_RPTL|XDLC_OVADR|XDLC_CHBASE|XDLC_OVATT|XDLC_END)
+        dta 8-1                ; always 8 scanlines = 1 text row
+        dta <(STATUS_ROW * SCR_STRIDE), >(STATUS_ROW * SCR_STRIDE), 0
+        dta a(SCR_STRIDE)
+        dta CHBASE_VAL
+        dta $11, $FF
 .endp
 
 
@@ -558,59 +609,21 @@ TITLE_TEXT_ROWS = (240 - GRAD_BANDS * GRAD_BAND_H) / 8  ; = 26
 ; MUST be below $4000 (uses MEMAC B)
 ; ----------------------------------------------------------------------------
 .proc title_gfx_init
-        memb_on 0
-
-        ; Fill 4 gradient bands at MEMB_BASE + VRAM_GRADIENT ($7000)
-        lda #<(MEMB_BASE + VRAM_GRADIENT)
-        sta zp_tmp_ptr
-        lda #>(MEMB_BASE + VRAM_GRADIENT)
-        sta zp_tmp_ptr+1
-
-        ldx #0
-?band   lda grad_colors,x
-        stx zp_tmp1            ; save band index
-
-        ; Fill 256 bytes
-        ldy #0
-?f1     sta (zp_tmp_ptr),y
-        iny
-        bne ?f1
-
-        ; Advance pointer by 256
-        inc zp_tmp_ptr+1
-
-        ; Fill remaining 64 bytes (320-256)
-        ldy #0
-?f2     sta (zp_tmp_ptr),y
-        iny
-        cpy #64
-        bne ?f2
-
-        ; Advance pointer by 64
-        clc
-        lda zp_tmp_ptr
-        adc #64
-        sta zp_tmp_ptr
-        bcc ?nc
-        inc zp_tmp_ptr+1
-?nc     ldx zp_tmp1
-        inx
-        cpx #GRAD_BANDS
-        bne ?band
-
         ; Copy title XDL to VRAM
-        ldx #0
+        memb_on 0
+        ldx #TITLE_XDL_LEN-1
 ?xdl    lda title_xdl_data,x
         sta MEMB_XDL,x
-        inx
-        cpx #TITLE_XDL_LEN
-        bne ?xdl
-
+        dex
+        bpl ?xdl
         memb_off
-        rts
-
-; Gradient colors: palette indices, top (dark) to bottom (light)
-grad_colors dta 8, 9, 10, 11
+        ; 4 gradient bands (320 bytes each at VRAM_GRADIENT): one blit, the
+        ; source steps one colour byte per row with X step 0 (vbxe_init).
+        ; Started, not waited for: the text that follows goes to the screen
+        ; area, not the gradient
+        lda #<(VRAM_BCB+BCB_GRAD_OFS)
+        ldx #>(VRAM_BCB+BCB_GRAD_OFS)
+        jmp blit_go
 
 title_xdl_data
         ; Band 0 (top, darkest)
@@ -652,3 +665,10 @@ title_xdl_data
 
 TITLE_XDL_LEN = * - title_xdl_data
 .endp
+
+; ============================================================================
+; MEMAC B boundary guard: everything above (vbxe_text, find, vbxe_gfx)
+; runs with the MEMAC B window ($4000-$7FFF) enabled and MUST stay below
+; $4000. Build fails here if code growth pushes it over the boundary.
+; ============================================================================
+        ert *>$4000

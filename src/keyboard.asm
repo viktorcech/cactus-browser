@@ -68,7 +68,87 @@ kdev_name dta c'K:',$9B
 ; Output: Y = length entered
 ;         C=0 confirmed (Enter), C=1 cancelled (Esc)
 ; ----------------------------------------------------------------------------
+kgl_inv dta 0                  ; $80: kbd_get_line echoes inverse
+
 .proc kbd_get_line
+ .if 1                          ; 2026-09-23 (one status bar for everything): echo through ?put (kgl_inv)
+        stx kgl_max
+        ldy #0
+        sty kgl_len
+
+?loop   ; Show cursor (putchar advances; cursor_back undoes the advance)
+        lda #'_'
+        jsr ?put
+        jsr cursor_back
+
+        jsr kbd_get
+
+        ; Enter = confirm
+        cmp #ATASCII_EOL
+        beq ?confirm
+
+        ; Escape = cancel
+        cmp #ATASCII_ESC
+        beq ?cancel
+
+        ; Backspace
+        cmp #ATASCII_BS
+        beq ?bksp
+
+        ; Filter: only printable ASCII ($20-$7D)
+        cmp #ATASCII_SP
+        bcc ?loop
+        cmp #$7E
+        bcs ?loop
+
+        ; Check max length
+        ldy kgl_len
+        cpy kgl_max
+        bcs ?loop
+
+        ; Store character and echo it
+        sta (zp_tmp_ptr),y
+        inc kgl_len
+        jsr ?put
+        jmp ?loop
+
+?bksp   ldy kgl_len
+        beq ?loop
+
+        dec kgl_len
+        ; Erase cursor + last char
+        lda #ATASCII_SP
+        jsr ?put
+        jsr cursor_back
+        jsr cursor_back
+        lda #ATASCII_SP
+        jsr ?put
+        jsr cursor_back
+        jmp ?loop
+
+?confirm
+        lda #ATASCII_SP
+        jsr ?put
+        ldy kgl_len
+        lda #0
+        sta (zp_tmp_ptr),y
+        sta kgl_inv            ; A = 0: next line input is plain again
+        clc
+        rts
+
+?cancel
+        lda #ATASCII_SP
+        jsr ?put
+        lda #0
+        sta kgl_inv
+        sec
+        rts
+
+?put    ora kgl_inv            ; $80: typing into the status bar
+        jmp vbxe_putchar
+kgl_max dta 0
+kgl_len dta 0
+ .else
         stx kgl_max
         ldy #0
         sty kgl_len
@@ -140,6 +220,7 @@ kdev_name dta c'K:',$9B
 
 kgl_max dta 0
 kgl_len dta 0
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -147,14 +228,13 @@ kgl_len dta 0
 ; When col=0, wraps to col=SCR_COLS-1 on previous row
 ; ----------------------------------------------------------------------------
 .proc cursor_back
-        lda zp_cursor_col
-        bne ?dec
-        lda #SCR_COLS-1
+        dec zp_cursor_col
+        bpl ?dec               ; col was 1..79
+        lda #SCR_COLS-1        ; col was 0: last column of the previous row
         sta zp_cursor_col
         dec zp_cursor_row
         jmp calc_scr_ptr       ; row changed, full recalc
-?dec    dec zp_cursor_col
-        ; Update cached screen pointer (back 2 bytes = 1 char+attr)
+?dec    ; Update cached screen pointer (back 2 bytes = 1 char+attr)
         lda zp_scr_ptr
         sec
         sbc #2

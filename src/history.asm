@@ -26,18 +26,17 @@ HIST_ENTRY_SZ  = 130   ; 128 bytes URL + 2 bytes scroll pos
 
 ?room   jsr calc_hist_addr
 
-        ldy #0
-?cp     lda url_buffer,y
-        sta (zp_tmp_ptr),y
-        iny
-        cpy #128
-        bne ?cp
-
+        ldy #128               ; scroll pos after the 128-byte URL
         lda zp_scroll_pos
         sta (zp_tmp_ptr),y
         iny
         lda zp_scroll_pos+1
         sta (zp_tmp_ptr),y
+        ldy #127
+?cp     lda url_buffer,y
+        sta (zp_tmp_ptr),y
+        dey
+        bpl ?cp
 
         inc zp_hist_ptr
         rts
@@ -54,18 +53,17 @@ HIST_ENTRY_SZ  = 130   ; 128 bytes URL + 2 bytes scroll pos
         dec zp_hist_ptr
         jsr calc_hist_addr
 
-        ldy #0
-?cp     lda (zp_tmp_ptr),y
-        sta url_buffer,y
-        iny
-        cpy #128
-        bne ?cp
-
+        ldy #128
         lda (zp_tmp_ptr),y
         sta zp_scroll_pos
         iny
         lda (zp_tmp_ptr),y
         sta zp_scroll_pos+1
+        ldy #127
+?cp     lda (zp_tmp_ptr),y
+        sta url_buffer,y
+        dey
+        bpl ?cp
 
         ; Recalc url_length
         ldy #0
@@ -83,61 +81,56 @@ HIST_ENTRY_SZ  = 130   ; 128 bytes URL + 2 bytes scroll pos
 
 ; ----------------------------------------------------------------------------
 ; calc_hist_addr - Set zp_tmp_ptr to history_data + zp_hist_ptr * 130
+; Table lookup instead of the old repeated-add loop (x130 per entry)
 ; ----------------------------------------------------------------------------
 .proc calc_hist_addr
-        lda #<history_data
-        sta zp_tmp_ptr
-        lda #>history_data
-        sta zp_tmp_ptr+1
-
         ldx zp_hist_ptr
-        beq ?done
-?add    lda zp_tmp_ptr
-        clc
-        adc #HIST_ENTRY_SZ
+        lda hist_addr_lo,x
         sta zp_tmp_ptr
-        lda zp_tmp_ptr+1
-        adc #0
+        lda hist_addr_hi,x
         sta zp_tmp_ptr+1
-        dex
-        bne ?add
-?done   rts
+        rts
 .endp
+
+hist_addr_lo
+        :HIST_MAX dta <(history_data + # * HIST_ENTRY_SZ)
+hist_addr_hi
+        :HIST_MAX dta >(history_data + # * HIST_ENTRY_SZ)
 
 ; ----------------------------------------------------------------------------
 ; history_shift - Shift entries down (discard oldest)
 ; ----------------------------------------------------------------------------
 .proc history_shift
-        ldx #0
-?lp     inx
-        cpx #HIST_MAX
-        beq ?done
-
-        stx zp_tmp1
-
-        ; Source = entry X
-        stx zp_hist_ptr
-        jsr calc_hist_addr
-        lda zp_tmp_ptr
+        ldx #1
+?lp     lda hist_addr_lo,x     ; source = entry X
         sta zp_tmp_ptr2
-        lda zp_tmp_ptr+1
+        lda hist_addr_hi,x
         sta zp_tmp_ptr2+1
-
-        ; Dest = entry X-1
-        ldx zp_tmp1
-        dex
-        stx zp_hist_ptr
-        jsr calc_hist_addr
-
+        lda hist_addr_lo-1,x   ; dest = entry X-1
+        sta zp_tmp_ptr
+        lda hist_addr_hi-1,x
+        sta zp_tmp_ptr+1
+ .if 1                          ; 2026-09-23 (6502-idioms: count DOWN, dex/bne): Y = SZ-1..1 in the
+                                ; loop, byte 0 after it; entries do not overlap, so order is free
+        ldy #HIST_ENTRY_SZ-1
+?cp     lda (zp_tmp_ptr2),y    ; 130 bytes (> 128: no dey/bpl)
+        sta (zp_tmp_ptr),y
+        dey
+        bne ?cp
+        lda (zp_tmp_ptr2),y    ; Y = 0
+        sta (zp_tmp_ptr),y
+ .else
         ldy #0
-?cp     lda (zp_tmp_ptr2),y
+?cp     lda (zp_tmp_ptr2),y    ; 130 bytes (> 128: no dey/bpl)
         sta (zp_tmp_ptr),y
         iny
         cpy #HIST_ENTRY_SZ
         bne ?cp
-
-        ldx zp_tmp1
-        jmp ?lp
-
-?done   rts
+ .endif
+        inx
+        cpx #HIST_MAX
+        bne ?lp
+        ldx #HIST_MAX-2        ; zp_hist_ptr as the old per-entry loop left
+        stx zp_hist_ptr        ; it (history_push decrements it next)
+        rts
 .endp

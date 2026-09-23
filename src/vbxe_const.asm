@@ -50,8 +50,15 @@ XDLC_END      = $8000
 ; ----------------------------------------------------------------------------
 VRAM_SCREEN    = $0000  ; Screen: SCR_ROWS*160 bytes (4800 for 30 rows)
 VRAM_BCB       = $1300  ; BCB blocks (after screen)
-VRAM_PATTERN   = $1380  ; Fill pattern (2 bytes)
-VRAM_XDL       = $1400  ; XDL
+VRAM_PATTERN   = $1380  ; (original) fill pattern, 2 bytes
+VRAM_GRAD      = $13C0  ; title gradient colours + BCB
+VRAM_XDL       = $1400  ; XDL (up to 128 bytes)
+VRAM_IMG_BCB   = $1480  ; image centring BCBs (img_fetch)
+ .if 1                          ; 2026-09-23 (vbxe-blitter: 4 constant-fill BCBs, 84 bytes)
+VRAM_GRAD_BCB  = $14C0  ; title gradient BCBs (after the image BCBs)
+VRAM_HLINE_BCB = VRAM_GRAD_BCB+4*21 ; vbxe_hline BCB pair (copied with the gradient)
+MEMB_HLINE_BCB = MEMB_BASE+VRAM_HLINE_BCB
+ .endif
 VRAM_FONT      = $2000  ; Font: 256*8 = 2048 bytes
 PAGE_BUF_BANK  = 5      ; VRAM $14000 >> 14 = 5
 
@@ -59,7 +66,7 @@ PAGE_BUF_BANK  = 5      ; VRAM $14000 >> 14 = 5
 MEMB_BASE      = $4000
 MEMB_SCREEN    = $4000
 MEMB_BCB       = $5300
-MEMB_PATTERN   = $5380
+MEMB_PATTERN   = $5380  ; (original)
 MEMB_XDL       = $5400
 MEMB_FONT      = $6000
 
@@ -174,7 +181,11 @@ zp_word_len    = $95
 zp_indent      = $96
 zp_in_link     = $97
 zp_link_num    = $98
-; $99-$9B free (removed: zp_in_heading, zp_in_list, zp_in_bold — write-only)
+; Hot parser vars in ZP (save 1-3 cycles per page byte / text char vs
+; their old absolute-memory locations; defined here, used in html_parser)
+chunk_idx      = $99   ; parser position in rx_buffer (2 accesses per byte!)
+emit_skip      = $9A   ; combined skip flag (tested per text char)
+utf8_skip      = $9B   ; UTF-8 continuation bytes left (tested per text char)
 zp_in_skip     = $9C
 zp_list_type   = $9D
 zp_list_item   = $9E
@@ -187,9 +198,10 @@ zp_rx_len      = $A3
 
 zp_cur_link    = $A4
 zp_scroll_pos  = $A5   ; 2 bytes
-; $A7-$A8 free (removed: zp_page_lines — write-only)
+ansi_state     = $A7   ; ANSI escape state (tested per emitted char)
+in_pre         = $A8   ; inside <pre> (tested per emitted char)
 zp_hist_ptr    = $A9   ; 1 byte - history stack index (0-7)
-; $AA free (removed: zp_fn_got_data — never referenced)
+in_quotes      = $AA   ; quote char inside attr value (tested per attr byte)
 zp_img_ptr     = $AB   ; 2 bytes - image write pointer (MEMAC B window)
 zp_memb_shadow = $AD   ; MEMAC B shadow for NMI-safe restore
 zp_tirq_saved  = $AE   ; Timer IRQ: saved shadow value
@@ -202,6 +214,14 @@ zp_pb_rd_ptr   = $BA   ; 2B read pointer
 ; TAB navigation ($BC)
 zp_tab_link    = $BC   ; currently selected link via TAB ($FF = none)
 
+; Renderer/parser flags tested per character ($BD-$BF)
+skip_hf        = $BD   ; skip_to_heading OR skip_to_frag (update_emit_skip)
+emit_slow      = $BE   ; emit_skip OR ansi_state OR in_pre OR in_title: 0 = plain text
+last_was_sp    = $BF   ; last output was a space (only read while zp_word_len = 0)
+
+; Tables and buffers outside the MEMAC B window (data.asm, $8000+)
+; char_class, print_buf -- readable while the window is open
+
 ; ----------------------------------------------------------------------------
 ; Macros
 ; ----------------------------------------------------------------------------
@@ -210,6 +230,47 @@ zp_tab_link    = $BC   ; currently selected link via TAB ($FF = none)
 ; IMPORTANT: Code using these macros MUST be below $4000!
 ; When MEMAC B is active, $4000-$7FFF reads VRAM, not RAM.
 ; Interrupt handlers use stubs at page 6 to disable/restore MEMAC B.
+;
+; The register is written absolute (4 cycles, Y untouched) at the page the
+; code is assembled for ($D6xx). Every such store records the address of
+; its operand's high byte in the MADS .PUT array: element 0 counts them
+; (labels set inside a macro stay local to it, the array is global),
+; elements 2.. hold the addresses. data.asm emits the list (.SAV) and
+; memac_patch moves them all to $D7xx when VBXE answers there.
+ .if 1                          ; 2026-09-23 (6502-cycles-layout / vbxe: MEMAC B written absolute, patched
+                                ; to the detected page at start; -4 cycles a switch, Y kept).
+                                ; Pairs with memac_patch (vbxe_detect) and memac_sites (data)
+VBXE_REGS = $D600
+        .put [0] = 0
+
+; memb_set: A = MEMAC B value (store the shadow first: NMI-safe ordering)
+memb_set .macro
+        sta VBXE_REGS+VBXE_MEMAC_B
+        .put [2+.get[0]*2] = <(*-1)
+        .put [3+.get[0]*2] = >(*-1)
+        .put [0] = .get[0]+1
+        .endm
+
+memb_on .macro
+        lda #$80+:1
+        sta zp_memb_shadow     ; shadow FIRST (NMI-safe ordering)
+        memb_set
+        .endm
+
+memb_off .macro
+        lda #0
+        sta zp_memb_shadow     ; shadow FIRST (NMI-safe ordering)
+        memb_set
+        .endm
+ .else
+VBXE_REGS = $D600
+        .put [0] = 0
+
+memb_set .macro
+        ldy #VBXE_MEMAC_B
+        sta (zp_vbxe_base),y
+        .endm
+
 memb_on .macro
         lda #$80+:1
         sta zp_memb_shadow     ; shadow FIRST (NMI-safe ordering)
@@ -223,6 +284,7 @@ memb_off .macro
         ldy #VBXE_MEMAC_B
         sta (zp_vbxe_base),y
         .endm
+ .endif
 
 ; Show message on status bar: :1=color, :2=message address
 ; Expands to subroutine call (9 bytes) instead of inline (31 bytes)
@@ -240,6 +302,22 @@ wait_frames .macro
         jsr wait_frames_sub
         .endm
 
+; page_fit off, len: pad (placed after an unconditional exit) so that the
+; loop starting `off` bytes after the pad and the instruction after its
+; back branch (`len` bytes on) share one page: the branch stays 3 cycles.
+; off/len are label differences inside the next proc, so they do not move.
+page_fit .macro
+ .if 1                          ; 2026-09-23 (6502-cycles-layout: hot loops kept in one page)
+?pf_s   = * + :1
+        .if >?pf_s <> >(?pf_s + :2)
+        :($100 - <?pf_s) dta 0
+        .endif
+ .else
+        ; (no pad)
+ .endif
+        .endm
+
+; Original blitter macros and fill pattern, kept for the .else paths
 blit_start .macro
         ldy #VBXE_BL_ADR0
         lda #<:1
@@ -259,4 +337,11 @@ blit_wait .macro
         ldy #VBXE_BLITTER
 ?bw     lda (zp_vbxe_base),y
         bne ?bw
+        .endm
+
+; Run the BCB list at VRAM :1 (bank 0) and wait for it (blit_run)
+blit .macro
+        lda #<(:1)
+        ldx #>(:1)
+        jsr blit_run
         .endm

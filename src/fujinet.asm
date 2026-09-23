@@ -45,14 +45,7 @@ RX_BUF_SIZE    = 256
         sta DAUX1
         lda #FN_TRANS_NONE
         sta DAUX2
-
-        jsr SIOV
-        lda DSTATS
-        bmi ?err
-        clc
-        rts
-?err    sec
-        rts
+        jmp sio_ok
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -83,9 +76,8 @@ RX_BUF_SIZE    = 256
         sta DAUX1
         sta DAUX2
 
-        jsr SIOV
-        lda DSTATS
-        bmi ?err
+        jsr sio_ok
+        bcs ?err
 
         lda DVSTAT
         sta zp_fn_bytes_lo
@@ -94,12 +86,14 @@ RX_BUF_SIZE    = 256
         lda DVSTAT+2
         sta zp_fn_connected
         lda DVSTAT+3
+ .if 1                          ; 2026-09-23 (6502-idioms: known carry: the not-taken bcs ?err leaves C = 0)
+        sta zp_fn_error        ; C = 0: the bcs ?err above was not taken
+?err    rts
+ .else
         sta zp_fn_error
-
         clc
-        rts
-?err    sec
-        rts
+?err    rts
+ .endif
 .endp
 
 ; ----------------------------------------------------------------------------
@@ -110,32 +104,22 @@ RX_BUF_SIZE    = 256
 ; Output: zp_rx_len = bytes read, C=0/1
 ; ----------------------------------------------------------------------------
 .proc fn_read
-        lda zp_fn_bytes_hi
-        bne ?max
         lda zp_fn_bytes_lo
-        beq ?nothing
-        bne ?use_lo
-
-?max    lda #255                       ; Max 255 bytes (fits in 8-bit rx_len)
-        sta zp_rx_len
-        sta DBYTLO
-        lda #0
-        sta DBYTHI
-        jmp ?do
-
-?use_lo sta zp_rx_len
-        sta DBYTLO
-        lda #0
-        sta DBYTHI
-        jmp ?do
-
-?nothing
-        lda #0
-        sta zp_rx_len
-        clc
+        ldx zp_fn_bytes_hi
+        beq ?lo
+        lda #255                       ; Max 255 bytes (fits in 8-bit rx_len)
+?lo     sta zp_rx_len
+        tax
+        bne ?do
+        clc                            ; nothing waiting
         rts
 
-?do     lda #FN_DEVID
+?do     stx DBYTLO
+        stx DAUX1                      ; DAUX = DBYT (FujiNet requirement)
+        lda #0
+        sta DBYTHI
+        sta DAUX2
+        lda #FN_DEVID
         sta DDEVIC
         lda fn_cur_unit
         sta DUNIT
@@ -149,17 +133,16 @@ RX_BUF_SIZE    = 256
         sta DBUFHI
         lda #FN_TIMEOUT
         sta DTIMLO
-        lda DBYTLO
-        sta DAUX1
-        lda DBYTHI
-        sta DAUX2
+        jmp sio_ok
+.endp
 
+; ----------------------------------------------------------------------------
+; sio_ok - Call SIOV; C = 1 when DSTATS reports an error (bit 7)
+; ----------------------------------------------------------------------------
+.proc sio_ok
         jsr SIOV
         lda DSTATS
-        bmi ?err
-        clc
-        rts
-?err    sec
+        asl                    ; C = bit 7 = error
         rts
 .endp
 
@@ -182,7 +165,7 @@ RX_BUF_SIZE    = 256
         sta img_chunk_lo
         lda #>IMG_BIG_SIZE
         sta img_chunk_hi
-        jmp ?do
+        bne ?do                ; always
 ?use    sta img_chunk_hi
         lda zp_fn_bytes_lo
         sta img_chunk_lo
@@ -209,17 +192,9 @@ RX_BUF_SIZE    = 256
         lda img_chunk_hi
         sta DBYTHI
         sta DAUX2
-
-        jsr SIOV
-        lda DSTATS
-        bmi ?err
-        clc
-        rts
-?err    sec
-        rts
+        jmp sio_ok
 ?nothing
-        lda #0
-        sta img_chunk_lo
+        sta img_chunk_lo       ; A = 0 (ora / beq)
         sta img_chunk_hi
         clc
         rts
@@ -235,9 +210,8 @@ RX_BUF_SIZE    = 256
         sta DUNIT
         lda #FN_CMD_CLOSE
         sta DCOMND
-        lda #SIO_NONE
+        lda #SIO_NONE          ; = 0
         sta DSTATS
-        lda #0
         sta DBUFLO
         sta DBUFHI
         sta DBYTLO
